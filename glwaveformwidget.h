@@ -19,6 +19,8 @@ public:
     void setAudioBuffer(const QVector<float> &samples, double durationSeconds, int sampleRate);
     void setPlaybackPosition(double seconds);
     void setChords(const QVector<ChordMarker> &chords);
+    void setPitchShift(float semitones);
+    void setAccentColor(const QColor &color);
     void setBpm(int bpm);
     void setVisibleFraction(float fraction);
     void setScrollOffset(int offset);
@@ -49,6 +51,8 @@ private:
     double m_duration = 0.0;
     int m_sampleRate = 44100;
     int m_bpm = 120;
+    float m_pitchShift = 0.0f;
+    QColor m_accentColor = QColor(245, 158, 11);
     double m_currentPosition = 0.0;
 
     float m_visibleFraction = 0.1f; // X Time Zoom Factor (0.1 = 10% visible)

@@ -104,6 +104,16 @@ void GLWaveformWidget::setPlaybackPosition(double seconds) {
     update();
 }
 
+void GLWaveformWidget::setAccentColor(const QColor &color) {
+    m_accentColor = color;
+    update();
+}
+
+void GLWaveformWidget::setPitchShift(float semitones) {
+    m_pitchShift = semitones;
+    update();
+}
+
 void GLWaveformWidget::setChords(const QVector<ChordMarker> &chords) {
     m_chords = chords;
     update();
@@ -175,7 +185,7 @@ void GLWaveformWidget::paintGL() {
         int xStart = static_cast<int>((m_selectStartSec / m_duration) * totalWidth);
         int xEnd = static_cast<int>((m_selectEndSec / m_duration) * totalWidth);
         painter.fillRect(QRect(xStart, graphTopY, xEnd - xStart, h - graphTopY), QColor(245, 158, 11, 60));
-        painter.setPen(QPen(QColor(245, 158, 11), 1.5, Qt::DashLine));
+        painter.setPen(QPen(m_accentColor, 1.5, Qt::DashLine));
         painter.drawRect(QRect(xStart, graphTopY, xEnd - xStart, h - graphTopY));
     }
 
@@ -194,7 +204,8 @@ void GLWaveformWidget::paintGL() {
             }
         }
 
-        painter.setPen(QPen(QColor(245, 158, 11), 1)); // Waveform Amber Color
+        QColor waveColor = (m_pitchShift < 0.0f) ? QColor(200, 200, 200) : m_accentColor;
+        painter.setPen(QPen(waveColor, 1));
 
         // Draw min/max peak envelope per pixel column
         for (int x = m_scrollOffset; x < m_scrollOffset + visibleWidth && x < totalWidth; ++x) {

@@ -11,7 +11,8 @@ public:
 
     void setChord(const QString &currentChord, const QString &nextChord = "");
     void setViewMode(bool isTab);       // true = Tabs, false = Fretboard
-    void setFingeringMode(bool isPower);// true = Power, false = Standard
+    void setFingeringMode(bool isPower);
+    void setAccentColor(const QColor &color);// true = Power, false = Standard
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -21,6 +22,7 @@ private:
     QString m_nextChord = "D";
     bool m_viewTabs = false;
     bool m_powerMode = false;
+    QColor m_accentColor = QColor(245, 158, 11);
 
     struct Shape {
         QVector<QString> stdShape;

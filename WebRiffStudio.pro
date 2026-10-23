@@ -1,4 +1,12 @@
-QT += core gui widgets multimedia network openglwidgets
+QT += core gui widgets multimedia network
+
+# Qt 6 moved QOpenGLWidget into its own module
+greaterThan(QT_MAJOR_VERSION, 5) {
+    QT += openglwidgets
+} else {
+    QT += opengl
+}
+
 CONFIG += c++17
 
 TARGET = WebRiffStudio

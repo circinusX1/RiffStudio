@@ -8,9 +8,15 @@
 class KnobWidget : public QDial {
     Q_OBJECT
 public:
+    QColor m_accentColor = QColor("#f59e0b");
+
+public:
     explicit KnobWidget(QWidget *parent = nullptr) : QDial(parent) {
         setFocusPolicy(Qt::StrongFocus);
     }
+
+public:
+    void setAccentColor(const QColor &color) { m_accentColor = color; update(); }
 
 protected:
     void paintEvent(QPaintEvent *) override {
@@ -26,7 +32,7 @@ protected:
         double startAngle = 240.0;
         double endAngle = -60.0;
         double currentValAngle = 240.0 - (value() - minimum()) * 300.0 / (maximum() - minimum());
-        QColor tickColor = isEnabled() ? QColor("#f59e0b") : QColor("#52525b");
+        QColor tickColor = isEnabled() ? m_accentColor : QColor("#52525b");
         painter.setPen(QPen(tickColor, 1.5, Qt::SolidLine, Qt::RoundCap));
 
         for (int i = 0; i < numTicks; ++i) {

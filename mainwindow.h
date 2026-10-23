@@ -16,6 +16,9 @@
 #include <QGroupBox>
 #include <QByteArray>
 #include <QTimer>
+#include <QStatusBar>
+#include <QProgressBar>
+#include <QResizeEvent>
 #include <soundtouch/SoundTouch.h>
 #include "glwaveformwidget.h"
 #include "fretboardwidget.h"
@@ -27,6 +30,10 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow() = default;
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void openAudioFile();
@@ -45,7 +52,7 @@ private slots:
 private:
     void setupMenuBar();
     void setupUi();
-    void loadAudioFile(const QString &filePath); // Added missing declaration
+    void loadAudioFile(const QString &filePath);
     void addRecentFile(const QString &filePath);
     void updateRecentFileActions();
     void loadLastOpenedFile();
@@ -55,6 +62,10 @@ private:
     int detectBpm(const QVector<float> &samples, int sampleRate);
     QByteArray processAudioWithSoundTouch(float tempo, float pitch);
     void updatePreprocessedAudio();
+    void updatePreprocessedAudioAsync();
+    void applyTheme(bool cyan);
+    void saveSettings();
+    void loadSettings();
 
     QMediaPlayer *m_player = nullptr;
     QAudioOutput *m_audioOutput = nullptr;
@@ -62,6 +73,10 @@ private:
     QAudioDecoder *m_audioDecoder = nullptr;
     QBuffer *m_audioBufferDevice = nullptr;
     QTimer *m_playbackTimer = nullptr;
+    QStatusBar *m_statusBar = nullptr;
+    QProgressBar *m_processBar = nullptr;
+    QPushButton *m_themeToggleBtn = nullptr;
+    bool m_cyanTheme = false;
 
     GLWaveformWidget *m_waveformWidget = nullptr;
     FretboardWidget *m_fretboardWidget = nullptr;
@@ -71,19 +86,21 @@ private:
     QPushButton *m_stopBtn = nullptr;
     QPushButton *m_repeatBtn = nullptr;
     QLabel *m_timeDisplay = nullptr;
-    QLabel *m_bpmValueLabel = nullptr;
     QLabel *m_speedValueLabel = nullptr;
     QLabel *m_pitchValueLabel = nullptr;
     QLabel *m_volumeValueLabel = nullptr;
     QLabel *m_timelineValueLabel = nullptr;
-    QLabel *m_hopSizeLabel = nullptr; // Added missing label declaration
-    QLabel *m_fftSizeLabel = nullptr; // Added missing label declaration
+    QLabel *m_hopSizeLabel = nullptr;
+    QLabel *m_fftSizeLabel = nullptr;
 
-    KnobWidget *m_speedKnob = nullptr;
-    KnobWidget *m_pitchKnob = nullptr;
+    QPushButton *m_speedButtons[7] = {nullptr};
+    float m_currentSpeed = 1.0f;
+    QPushButton *m_pitchButtons[9] = {nullptr};
+    float m_currentPitch = 0.0f;
     KnobWidget *m_volumeKnob = nullptr;
     QSlider *m_timelineSlider = nullptr;
 
+    QGroupBox *m_tempoGroup = nullptr;
     QGroupBox *m_chordExtractionGroup = nullptr;
     QComboBox *m_hopSizeCombo = nullptr;
     QComboBox *m_fftSizeCombo = nullptr;
@@ -106,6 +123,8 @@ private:
     double m_loopEndSec = -1.0;
     double m_currentPositionSec = 0.0;
     bool m_isPaused = false;
+    bool m_processing = false;
+    bool m_resumeAfterProcess = false;
     qint64 m_playbackStartTimeMs = 0;
 };
 

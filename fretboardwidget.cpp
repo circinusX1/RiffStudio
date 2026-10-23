@@ -30,6 +30,11 @@ void FretboardWidget::setViewMode(bool isTab) {
     update();
 }
 
+void FretboardWidget::setAccentColor(const QColor &color) {
+    m_accentColor = color;
+    update();
+}
+
 void FretboardWidget::setFingeringMode(bool isPower) {
     m_powerMode = isPower;
     update();
@@ -77,14 +82,14 @@ void FretboardWidget::drawFretboard(QPainter &painter, const QRect &bounds, cons
 
         // Mini Header Title
         painter.setFont(QFont("Monospace", 8, QFont::Bold));
-        painter.setPen(QColor(245, 158, 11));
+        painter.setPen(m_accentColor);
         painter.drawText(bounds.adjusted(6, 2, -6, 0), Qt::AlignTop | Qt::AlignLeft, "NEXT: " + chordName.toUpper());
     } else {
         // ========================================================
         // BOLD CURRENT CHORD NAME ABOVE MAIN FRETBOARD
         // ========================================================
         painter.setFont(QFont("Monospace", 14, QFont::Bold));
-        painter.setPen(QColor(245, 158, 11)); // Amber Highlight Color
+        painter.setPen(m_accentColor); // Amber Highlight Color
 
         QString chordTitle = chordName.isEmpty() ? "CHORD: --" : "CHORD: " + chordName.toUpper();
         painter.drawText(QRect(startX, bounds.top() - 2, endX - startX, 22), Qt::AlignLeft | Qt::AlignVCenter, chordTitle);
@@ -117,7 +122,7 @@ void FretboardWidget::drawFretboard(QPainter &painter, const QRect &bounds, cons
                 int mx = startX + ((fNum - 1) * fretW) + (fretW / 2);
                 int dotRadius = isMini ? 4 : 10;
 
-                painter.setBrush(isMini ? QColor(16, 185, 129) : QColor(217, 119, 6));
+                painter.setBrush(isMini ? QColor(16, 185, 129) : m_accentColor);
                 painter.setPen(Qt::NoPen);
                 painter.drawEllipse(QPoint(mx, sy), dotRadius, dotRadius);
             }
