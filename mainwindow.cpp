@@ -94,8 +94,15 @@ QVector<ChordMarker> MainWindow::analyzeAudioChords(const QVector<float> &sample
     }
 
     // Query preferred sizes; Chordino is strict about these
-    size_t preferredStep = plugin->getPreferredStepSize();
-    size_t preferredBlock = plugin->getPreferredBlockSize();
+    size_t preferredStep = hopSizeSec; //plugin->getPreferredStepSize();
+    size_t preferredBlock = fftSize; //plugin->getPreferredBlockSize();
+
+    if(fftSize != hopSizeSec)
+    {
+        if (m_statusBar) {
+            m_statusBar->showMessage("ERR FFT and HOP should be thre same for vamp plugins");
+        }
+    }
 
     int stepSize = preferredStep > 0 ? static_cast<int>(preferredStep)
                                      : static_cast<int>(hopSizeSec * sampleRate);
@@ -571,11 +578,6 @@ void MainWindow::updatePreprocessedAudioAsync() {
                 qDebug() << "Pitch change: reanalyzed chords, markers:" << m_extractedChords.size();
             }
 
-            if (m_statusBar) {
-                m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
-                m_statusBar->showMessage("Ready...");
-            }
-
             if (m_playPauseBtn) {
                 m_playPauseBtn->setEnabled(true);
             }
@@ -865,13 +867,13 @@ void MainWindow::setupUi() {
         "QComboBox QAbstractItemView { background-color: #18181b; color: #f59e0b; selection-background-color: #3f3f46; }";
 
     QVBoxLayout *hopLayout = new QVBoxLayout();
-    m_hopSizeLabel = new QLabel("Hop Size:", this);
+    m_hopSizeLabel = new QLabel("Step Size:", this);
     m_hopSizeLabel->setAlignment(Qt::AlignCenter);
     m_hopSizeLabel->setStyleSheet("color: #a1a1aa; font-weight: bold; font-size: 10px;");
 
     m_hopSizeCombo = new QComboBox(this);
-    m_hopSizeCombo->addItems({"0.5s", "1s", "1.5s", "2s"});
-    m_hopSizeCombo->setCurrentIndex(1);
+    m_hopSizeCombo->addItems({"2048","4096", "8192", "16384"});
+    m_hopSizeCombo->setCurrentIndex(3);
     m_hopSizeCombo->setStyleSheet(comboStyle);
     m_hopSizeCombo->setFixedWidth(80);
 
@@ -884,8 +886,8 @@ void MainWindow::setupUi() {
     m_fftSizeLabel->setStyleSheet("color: #a1a1aa; font-weight: bold; font-size: 10px;");
 
     m_fftSizeCombo = new QComboBox(this);
-    m_fftSizeCombo->addItems({"512", "1024", "2048", "4096", "8192", "16384"});
-    m_fftSizeCombo->setCurrentIndex(4);
+    m_fftSizeCombo->addItems({ "2048", "4096", "8192", "16384"});
+    m_fftSizeCombo->setCurrentIndex(3);
     m_fftSizeCombo->setStyleSheet(comboStyle);
     m_fftSizeCombo->setFixedWidth(80);
 
@@ -1232,7 +1234,7 @@ void MainWindow::handleDecoderFinished() {
     qDebug() << "Chord extraction finished. Markers found:" << m_extractedChords.size();
 
     // Only reset status if no plugin error occurred (error path already set red status)
-    if (m_statusBar && !m_statusBar->currentMessage().contains("ERROR: Could not load Vamp")) {
+    if (m_statusBar && !m_statusBar->currentMessage().contains("ERR")) {
         m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
         m_statusBar->showMessage("Ready...");
     }

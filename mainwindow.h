@@ -121,7 +121,7 @@ private:
     QByteArray m_preprocessedPcmData;
     QString m_tempWavPath;
     QVector<ChordMarker> m_extractedChords;
-    const int m_fftSizes[6] = {512, 1024, 2048, 4096, 8192, 16384};
+    const int m_fftSizes[4] = {2048, 4096, 8192, 16384};
 
     double m_loopStartSec = -1.0;
     double m_loopEndSec = -1.0;
