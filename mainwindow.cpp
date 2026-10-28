@@ -885,8 +885,9 @@ void MainWindow::updatePosition(qint64 position) {
     double currentSec = position / 1000.0;
     double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / 44100.0);
 
+    // Fixed: Only trigger loop when currentSec reaches m_loopEndSec (removed currentSec < m_loopStartSec check)
     if (m_repeatBtn->isChecked() && m_loopStartSec >= 0 && m_loopEndSec > m_loopStartSec) {
-        if (currentSec >= m_loopEndSec || currentSec < m_loopStartSec) {
+        if (currentSec >= m_loopEndSec) {
             m_currentPositionSec = m_loopStartSec;
             qint64 posMs = static_cast<qint64>(m_loopStartSec * 1000);
             if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
@@ -903,7 +904,7 @@ void MainWindow::updatePosition(qint64 position) {
         }
     }
 
-    m_waveformWidget->setPlaybackPosition(currentSec);
+     m_waveformWidget->setPlaybackPosition(currentSec);
 
     if (!m_extractedChords.isEmpty()) {
         QString currentChord = m_extractedChords.first().chordName;
@@ -942,7 +943,7 @@ void MainWindow::handleSelectionChanged(double startSec, double endSec) {
     } else {
         m_loopStartSec = -1.0;
         m_loopEndSec = -1.0;
-        m_repeatBtn->setChecked(false);
+        //m_repeatBtn->setChecked(false);
         m_repeatBtn->setEnabled(false);
     }
 }
