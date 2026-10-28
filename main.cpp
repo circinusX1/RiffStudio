@@ -1,12 +1,38 @@
+
 #include "mainwindow.h"
 #include <QApplication>
 #include <QStyleFactory>
-#include <essentia/essentia.h>
-#include <essentia/algorithmfactory.h>
+#include <QDir>
+#include <QDebug>
+#include <QCoreApplication>
+#include <QDir>
+#include <cstdlib>
+
+// Call this once at startup, before any chord analysis
+static void setupVampPluginPath()
+{
+    QString appDir = QCoreApplication::applicationDirPath();
+    QString pluginsDir = QDir(appDir).filePath("plugins");
+
+    // Create the folder if it doesn't exist (optional)
+    QDir().mkpath(pluginsDir);
+
+#ifdef Q_OS_WIN
+    // Windows: use _putenv_s (or setenv if available)
+    _putenv_s("VAMP_PATH", pluginsDir.toLocal8Bit().constData());
+#else
+    // Linux / macOS
+    setenv("VAMP_PATH", pluginsDir.toLocal8Bit().constData(), 1);
+#endif
+
+    qDebug() << "VAMP_PATH set to:" << pluginsDir;
+}
 
 int main(int argc, char *argv[]) {
-    essentia::init();
     QApplication app(argc, argv);
+
+    // Set VAMP_PATH so Chordino / nnls-chroma plugins are found next to the binary
+    //setupVampPluginPath();
 
     // Apply dark studio theme
     app.setStyle(QStyleFactory::create("Fusion"));
@@ -31,7 +57,6 @@ int main(int argc, char *argv[]) {
     w.show();
 
     int ir = app.exec();
-
-    essentia::shutdown();
     return ir;
 }
+

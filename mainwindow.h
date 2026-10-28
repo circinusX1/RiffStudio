@@ -19,6 +19,8 @@
 #include <QStatusBar>
 #include <QProgressBar>
 #include <QResizeEvent>
+#include <QFile>
+#include <QTemporaryFile>
 #include <soundtouch/SoundTouch.h>
 #include "glwaveformwidget.h"
 #include "fretboardwidget.h"
@@ -63,7 +65,8 @@ private:
     QByteArray processAudioWithSoundTouch(float tempo, float pitch);
     void updatePreprocessedAudio();
     void updatePreprocessedAudioAsync();
-    void applyTheme(bool cyan);
+    bool writePcmToTempWav(const QByteArray &pcm, int sampleRate, int channels);
+    void applyTheme(bool cyan, bool errorRed = false);
     void saveSettings();
     void loadSettings();
 
@@ -116,6 +119,7 @@ private:
 
     QVector<float> m_decodedSamples;
     QByteArray m_preprocessedPcmData;
+    QString m_tempWavPath;
     QVector<ChordMarker> m_extractedChords;
     const int m_fftSizes[6] = {512, 1024, 2048, 4096, 8192, 16384};
 
@@ -125,6 +129,7 @@ private:
     bool m_isPaused = false;
     bool m_processing = false;
     bool m_resumeAfterProcess = false;
+    bool m_reanalyzeChordsAfterProcess = false;
     qint64 m_playbackStartTimeMs = 0;
 };
 

@@ -16,6 +16,7 @@
 #include <QAudioFormat>
 #include <QAudioDevice>
 #include <QDebug>
+#include <QDir>
 #include <QThread>
 #include <QMetaObject>
 #include <cmath>
@@ -26,9 +27,11 @@
 #include <QDialogButtonBox>
 #include <QPainterPath>
 #include <QPainter>
-#include <essentia/essentia.h>
-#include <essentia/algorithmfactory.h>
+#include <vamp-hostsdk/PluginLoader.h>
+#include <vamp-hostsdk/Plugin.h>
+#include <vamp-hostsdk/RealTime.h>
 
+using namespace Vamp::HostExt; // <-- Add this
 // ========================================================
 // RADIX-2 FFT IMPLEMENTATION
 // ========================================================
@@ -50,7 +53,7 @@ static void fftProcess(std::valarray<std::complex<double>>& x) {
 }
 
 // ========================================================
-// ADVANCED ESSENTIA CHORD EXTRACTION ENGINE
+// VAMP HOST SDK CHORD EXTRACTION (CHORDINO / NNLS CHROMA)
 // ========================================================
 QVector<ChordMarker> MainWindow::analyzeAudioChords(const QVector<float> &samples,
                                                     double duration,
@@ -61,133 +64,116 @@ QVector<ChordMarker> MainWindow::analyzeAudioChords(const QVector<float> &sample
     QVector<ChordMarker> markers;
     if (samples.isEmpty() || duration <= 0 || sampleRate <= 0) return markers;
 
-    using namespace essentia;
-    using namespace essentia::standard;
+    using namespace Vamp;
+    using namespace Vamp::HostExt;
 
-    std::vector<float> audioBuffer(samples.begin(), samples.end());
+    PluginLoader *loader = PluginLoader::getInstance();
 
-    int frameSize = fftSize;
-    int hopSizeSamples = static_cast<int>(hopSizeSec * sampleRate);
-    if (hopSizeSamples < 1) hopSizeSamples = sampleRate;
+    // Try loading Chordino plugin key
+    PluginLoader::PluginKey key = loader->composePluginKey("nnls-chroma", "chordino");
+    Plugin *plugin = loader->loadPlugin(key, sampleRate, PluginLoader::ADAPT_ALL);
 
-    Algorithm* fc = AlgorithmFactory::create("FrameCutter",
-                                             "frameSize", frameSize,
-                                             "hopSize", hopSizeSamples);
-    Algorithm* w  = AlgorithmFactory::create("Windowing",
-                                             "type", "hann");
-    Algorithm* spec = AlgorithmFactory::create("Spectrum");
-    Algorithm* peaks = AlgorithmFactory::create("SpectralPeaks",
-                                                "sampleRate", static_cast<float>(sampleRate),
-                                                "maxFrequency", 2093.0f,
-                                                "minFrequency", 65.0f);
-    Algorithm* hpcp = AlgorithmFactory::create("HPCP",
-                                               "sampleRate", static_cast<float>(sampleRate),
-                                               "maxFrequency", 2093.0f,
-                                               "minFrequency", 65.0f);
-
-    std::vector<float> frame, windowedFrame, spectrum;
-    std::vector<float> peakFrequencies, peakMagnitudes;
-    std::vector<float> hpcpFrame;
-    std::vector<std::vector<float>> hpcpSequence;
-
-    fc->input("signal").set(audioBuffer);
-    fc->output("frame").set(frame);
-
-    w->input("frame").set(frame);
-    w->output("frame").set(windowedFrame);
-
-    spec->input("frame").set(windowedFrame);
-    spec->output("spectrum").set(spectrum);
-
-    peaks->input("spectrum").set(spectrum);
-    peaks->output("frequencies").set(peakFrequencies);
-    peaks->output("magnitudes").set(peakMagnitudes);
-
-    hpcp->input("frequencies").set(peakFrequencies);
-    hpcp->input("magnitudes").set(peakMagnitudes);
-    hpcp->output("hpcp").set(hpcpFrame);
-
-    while (true) {
-        fc->compute();
-        if (frame.empty()) break;
-
-        w->compute();
-        spec->compute();
-        peaks->compute();
-        hpcp->compute();
-
-        hpcpSequence.push_back(hpcpFrame);
+    if (!plugin) {
+        key = loader->composePluginKey("vamp-chordino", "chordino");
+        plugin = loader->loadPlugin(key, sampleRate, PluginLoader::ADAPT_ALL);
     }
 
-    const QStringList rootNotes = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    if (!plugin) {
+        const QString errMsg = "ERROR: Could not load Vamp Chordino plugin! Ensure vamp-plugin-sdk and chordino plugin binaries are installed.";
+        qDebug() << errMsg;
 
-    struct ChordTemplate {
-        QString name;
-        double profile[12];
-    };
-
-    QVector<ChordTemplate> templates;
-    for (int root = 0; root < 12; ++root) {
-        ChordTemplate maj;
-        maj.name = rootNotes[root];
-        std::fill(std::begin(maj.profile), std::end(maj.profile), 0.0);
-        maj.profile[root] = 1.0;
-        maj.profile[(root + 4) % 12] = 0.8;
-        maj.profile[(root + 7) % 12] = 0.5;
-        templates.append(maj);
-
-        ChordTemplate min;
-        min.name = rootNotes[root] + "m";
-        std::fill(std::begin(min.profile), std::end(min.profile), 0.0);
-        min.profile[root] = 1.0;
-        min.profile[(root + 3) % 12] = 0.8;
-        min.profile[(root + 7) % 12] = 0.5;
-        templates.append(min);
+        // Switch entire color scheme to red and show error in status bar
+        applyTheme(false, true);  // force red error theme
+        if (m_statusBar) {
+            m_statusBar->setStyleSheet(
+                "QStatusBar { background-color: #1a0505; color: #ef4444; font-family: monospace; font-size: 12px; font-weight: bold; }"
+            );
+            m_statusBar->showMessage(errMsg);
+        }
+        return markers;
     }
 
-    QString lastChord = "";
-    for (size_t i = 0; i < hpcpSequence.size(); ++i) {
-        const std::vector<float>& chroma = hpcpSequence[i];
-        if (chroma.size() < 12) continue;
+    // Query preferred sizes; Chordino is strict about these
+    size_t preferredStep = plugin->getPreferredStepSize();
+    size_t preferredBlock = plugin->getPreferredBlockSize();
 
-        QString bestChord = "";
-        double maxCorrelation = -1.0;
+    int stepSize = preferredStep > 0 ? static_cast<int>(preferredStep)
+                                     : static_cast<int>(hopSizeSec * sampleRate);
+    int blockSize = preferredBlock > 0 ? static_cast<int>(preferredBlock)
+                                       : fftSize;
 
-        for (const auto &tpl : templates) {
-            double dotProduct = 0.0, normA = 0.0, normB = 0.0;
+    // Ensure step <= block and both are positive
+    if (stepSize <= 0) stepSize = 2048;
+    if (blockSize <= 0) blockSize = 16384;
+    if (stepSize > blockSize) stepSize = blockSize / 2;
 
-            for (int c = 0; c < 12; ++c) {
-                dotProduct += chroma[c] * tpl.profile[c];
-                normA += chroma[c] * chroma[c];
-                normB += tpl.profile[c] * tpl.profile[c];
-            }
+    qDebug() << "Chordino initialise with stepSize:" << stepSize
+             << "blockSize:" << blockSize
+             << "(preferred step/block:" << preferredStep << preferredBlock << ")";
 
-            double similarity = (normA > 0 && normB > 0) ? (dotProduct / (std::sqrt(normA) * std::sqrt(normB))) : 0.0;
+    if (!plugin->initialise(1, stepSize, blockSize)) {
+        qDebug() << "ERROR: Failed to initialize Vamp Chordino plugin!";
+        delete plugin;
+        return markers;
+    }
 
-            if (similarity > maxCorrelation) {
-                maxCorrelation = similarity;
-                bestChord = tpl.name;
+    size_t sampleCount = samples.size();
+    size_t currentPosition = 0;
+
+    while (currentPosition < sampleCount) {
+        size_t blockLen = std::min(static_cast<size_t>(blockSize), sampleCount - currentPosition);
+
+        std::vector<float> block(blockLen);
+        std::copy(samples.begin() + currentPosition, samples.begin() + currentPosition + blockLen, block.begin());
+        if (blockLen < static_cast<size_t>(blockSize)) {
+            block.resize(blockSize, 0.0f);
+        }
+
+        RealTime timestamp = RealTime::frame2RealTime(currentPosition, sampleRate);
+        const float *audioFiles[1] = { block.data() };
+
+        Plugin::FeatureSet features = plugin->process(audioFiles, timestamp);
+
+        for (const auto &pair : features) {
+            const auto &featureList = pair.second;
+            for (const auto &feature : featureList) {
+                if (!feature.label.empty()) {
+                    double timeSec = feature.hasTimestamp ?
+                        (feature.timestamp.sec + static_cast<double>(feature.timestamp.nsec) / 1000000000.0) :
+                        (static_cast<double>(currentPosition) / sampleRate);
+
+                    QString chordName = QString::fromStdString(feature.label);
+
+                    if (markers.isEmpty() || markers.last().chordName != chordName) {
+                        markers.append({ timeSec, chordName });
+                    }
+                }
             }
         }
 
-        double timeSec = (i * hopSizeSamples) / static_cast<double>(sampleRate);
+        currentPosition += stepSize;
+    }
 
-        if (bestChord != lastChord && !bestChord.isEmpty()) {
-            markers.append({ timeSec, bestChord });
-            lastChord = bestChord;
+    Plugin::FeatureSet remaining = plugin->getRemainingFeatures();
+    for (const auto &pair : remaining) {
+        const auto &featureList = pair.second;
+        for (const auto &feature : featureList) {
+            if (!feature.label.empty()) {
+                double timeSec = feature.hasTimestamp ?
+                    (feature.timestamp.sec + static_cast<double>(feature.timestamp.nsec) / 1000000000.0) :
+                    0.0;
+
+                QString chordName = QString::fromStdString(feature.label);
+                if (markers.isEmpty() || markers.last().chordName != chordName) {
+                    markers.append({ timeSec, chordName });
+                }
+            }
         }
     }
 
-    delete fc;
-    delete w;
-    delete spec;
-    delete peaks;
-    delete hpcp;
-
+    delete plugin;
     return markers;
 }
-
-// ========================================================
 // TEMPO (BPM) DETECTION ALGORITHM
 // ========================================================
 int MainWindow::detectBpm(const QVector<float> &samples, int sampleRate) {
@@ -226,10 +212,23 @@ int MainWindow::detectBpm(const QVector<float> &samples, int sampleRate) {
 }
 
 // ========================================================
-// SOUNDTOUCH PRE-PROCESSING HELPER
+// SOUNDTOUCH PRE-PROCESSING HELPER (WITH 0 BUMP BYPASS)
 // ========================================================
+
 QByteArray MainWindow::processAudioWithSoundTouch(float tempo, float pitch) {
     if (m_decodedSamples.isEmpty()) return QByteArray();
+
+    // Bypass SoundTouch entirely when speed is 1.0 and pitch is 0.0 (pristine raw audio)
+    if (qFuzzyCompare(tempo, 1.0f) && qFuzzyIsNull(pitch)) {
+        QByteArray pcmData;
+        pcmData.resize(m_decodedSamples.size() * sizeof(qint16));
+        qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data());
+        for (int i = 0; i < m_decodedSamples.size(); ++i) {
+            float sample = std::max(-1.0f, std::min(1.0f, m_decodedSamples[i]));
+            outPtr[i] = static_cast<qint16>(sample * 32767.0f);
+        }
+        return pcmData;
+    }
 
     soundtouch::SoundTouch st;
     st.setSampleRate(44100);
@@ -237,21 +236,50 @@ QByteArray MainWindow::processAudioWithSoundTouch(float tempo, float pitch) {
     st.setTempo(tempo);
     st.setPitchSemiTones(pitch);
 
-    st.putSamples(m_decodedSamples.constData(), m_decodedSamples.size());
-    st.flush();
+    // Faster processing
+    st.setSetting(SETTING_USE_QUICKSEEK, 1);
+    st.setSetting(SETTING_SEQUENCE_MS, 40);
+    st.setSetting(SETTING_SEEKWINDOW_MS, 15);
+    st.setSetting(SETTING_OVERLAP_MS, 8);
 
     QByteArray pcmData;
-    int bufferSize = 4096;
-    std::vector<float> floatBuffer(bufferSize);
-    int received = 0;
+    pcmData.reserve(static_cast<int>(m_decodedSamples.size() * sizeof(qint16) * (tempo > 1.0f ? tempo : 1.0f) + 65536));
 
+    const int chunk = 8192;
+    std::vector<float> floatBuffer(chunk);
+    int offset = 0;
+    const int total = m_decodedSamples.size();
+
+    while (offset < total) {
+        int n = std::min(chunk, total - offset);
+        st.putSamples(m_decodedSamples.constData() + offset, n);
+        offset += n;
+
+        int received;
+        do {
+            received = st.receiveSamples(floatBuffer.data(), chunk);
+            if (received > 0) {
+                int bytesToWrite = received * static_cast<int>(sizeof(qint16));
+                int oldSize = pcmData.size();
+                pcmData.resize(oldSize + bytesToWrite);
+                qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data() + oldSize);
+                for (int i = 0; i < received; ++i) {
+                    float sample = std::max(-1.0f, std::min(1.0f, floatBuffer[i]));
+                    outPtr[i] = static_cast<qint16>(sample * 32767.0f);
+                }
+            }
+        } while (received > 0);
+    }
+
+    st.flush();
+    int received;
     do {
-        received = st.receiveSamples(floatBuffer.data(), bufferSize);
+        received = st.receiveSamples(floatBuffer.data(), chunk);
         if (received > 0) {
-            int bytesToWrite = received * sizeof(qint16);
-            pcmData.resize(pcmData.size() + bytesToWrite);
-            qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data() + pcmData.size() - bytesToWrite);
-
+            int bytesToWrite = received * static_cast<int>(sizeof(qint16));
+            int oldSize = pcmData.size();
+            pcmData.resize(oldSize + bytesToWrite);
+            qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data() + oldSize);
             for (int i = 0; i < received; ++i) {
                 float sample = std::max(-1.0f, std::min(1.0f, floatBuffer[i]));
                 outPtr[i] = static_cast<qint16>(sample * 32767.0f);
@@ -263,23 +291,76 @@ QByteArray MainWindow::processAudioWithSoundTouch(float tempo, float pitch) {
 }
 
 void MainWindow::updatePreprocessedAudio() {
-    // Synchronous version kept for initial load
     float tempo = m_currentSpeed;
     float pitchSt = m_currentPitch;
     m_preprocessedPcmData = processAudioWithSoundTouch(tempo, pitchSt);
 }
 
+bool MainWindow::writePcmToTempWav(const QByteArray &pcm, int sampleRate, int channels) {
+    if (pcm.isEmpty()) return false;
 
-void MainWindow::applyTheme(bool cyan) {
-    QString accent = cyan ? "#22d3ee" : "#f59e0b";
-    QString accentDark = cyan ? "#06b6d4" : "#d97706";
-    QColor accentColor = cyan ? QColor(34, 211, 238) : QColor(245, 158, 11);
+    QTemporaryFile temp(QDir::tempPath() + "/webriff_XXXXXX.wav");
+    temp.setAutoRemove(false);
+    if (!temp.open()) {
+        qWarning() << "Failed to create temp WAV";
+        return false;
+    }
+    m_tempWavPath = temp.fileName();
+    temp.close();
 
-    // Status bar
+    QFile f(m_tempWavPath);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+
+    // Minimal WAV header (PCM 16-bit)
+    const quint32 dataSize = static_cast<quint32>(pcm.size());
+    const quint16 audioFormat = 1; // PCM
+    const quint16 numChannels = static_cast<quint16>(channels);
+    const quint32 byteRate = sampleRate * numChannels * 2;
+    const quint16 blockAlign = numChannels * 2;
+    const quint16 bitsPerSample = 16;
+
+    QByteArray header;
+    header.append("RIFF", 4);
+    quint32 chunkSize = 36 + dataSize;
+    header.append(reinterpret_cast<const char*>(&chunkSize), 4);
+    header.append("WAVE", 4);
+    header.append("fmt ", 4);
+    quint32 fmtSize = 16;
+    header.append(reinterpret_cast<const char*>(&fmtSize), 4);
+    header.append(reinterpret_cast<const char*>(&audioFormat), 2);
+    header.append(reinterpret_cast<const char*>(&numChannels), 2);
+    quint32 sr = static_cast<quint32>(sampleRate);
+    header.append(reinterpret_cast<const char*>(&sr), 4);
+    header.append(reinterpret_cast<const char*>(&byteRate), 4);
+    header.append(reinterpret_cast<const char*>(&blockAlign), 2);
+    header.append(reinterpret_cast<const char*>(&bitsPerSample), 2);
+    header.append("data", 4);
+    header.append(reinterpret_cast<const char*>(&dataSize), 4);
+
+    f.write(header);
+    f.write(pcm);
+    f.close();
+    return true;
+}
+
+void MainWindow::applyTheme(bool cyan, bool errorRed) {
+    QString accent;
+    QString accentDark;
+    QColor accentColor;
+
+    if (errorRed) {
+        accent = "#ef4444";
+        accentDark = "#dc2626";
+        accentColor = QColor(239, 68, 68);
+    } else {
+        accent = cyan ? "#22d3ee" : "#f59e0b";
+        accentDark = cyan ? "#06b6d4" : "#d97706";
+        accentColor = cyan ? QColor(34, 211, 238) : QColor(245, 158, 11);
+    }
+
     if (m_statusBar && !m_processing)
         m_statusBar->setStyleSheet(QString("QStatusBar { background-color: #09090b; color: %1; font-family: monospace; font-size: 12px; }").arg(accent));
 
-    // Processing progress bar
     if (m_processBar) {
         m_processBar->setStyleSheet(QString(
             "QProgressBar { border: none; background-color: #09090b; }"
@@ -287,7 +368,6 @@ void MainWindow::applyTheme(bool cyan) {
         ).arg(accent));
     }
 
-    // Labels
     if (m_speedValueLabel) m_speedValueLabel->setStyleSheet(QString("color: %1; font-weight: bold; font-size: 16px; font-family: monospace;").arg(accent));
     if (m_pitchValueLabel) m_pitchValueLabel->setStyleSheet(QString("color: %1; font-weight: bold; font-size: 16px; font-family: monospace;").arg(accent));
     if (m_volumeValueLabel) m_volumeValueLabel->setStyleSheet(QString("color: %1; font-weight: bold; font-size: 22px; font-family: monospace;").arg(accent));
@@ -295,7 +375,6 @@ void MainWindow::applyTheme(bool cyan) {
     if (m_timeDisplay) m_timeDisplay->setStyleSheet(QString("background-color: #000000; color: %1; font-family: monospace; font-size: 14px; padding: 4px 12px; border-radius: 4px;").arg(accent));
     if (m_timelineValueLabel) m_timelineValueLabel->setStyleSheet(QString("color: %1; font-family: monospace; font-weight: bold; font-size: 11px;").arg(accent));
 
-    // Speed / Pitch buttons
     QString btnStyle = QString(
         "QPushButton { background-color: #18181b; color: %1; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold; font-size: 12px; min-width: 42px; min-height: 32px; }"
         "QPushButton:checked { background-color: %2; color: #09090b; }"
@@ -307,14 +386,12 @@ void MainWindow::applyTheme(bool cyan) {
     for (int i = 0; i < 9; ++i)
         if (m_pitchButtons[i]) m_pitchButtons[i]->setStyleSheet(btnStyle);
 
-    // Fingering toggle
     if (m_fingeringToggleBtn)
         m_fingeringToggleBtn->setStyleSheet(QString(
             "QPushButton { background-color: #18181b; color: %1; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold; font-size: 11px; } "
             "QPushButton:checked { background-color: %2; color: #09090b; }"
         ).arg(accent, accentDark));
 
-    // Combos
     QString comboStyle = QString(
         "QComboBox { background-color: #18181b; color: %1; border: 1px solid #3f3f46; border-radius: 4px; padding: 3px 8px; font-family: monospace; font-weight: bold; font-size: 11px; } "
         "QComboBox::drop-down { border: none; } "
@@ -323,12 +400,26 @@ void MainWindow::applyTheme(bool cyan) {
     if (m_hopSizeCombo) m_hopSizeCombo->setStyleSheet(comboStyle);
     if (m_fftSizeCombo) m_fftSizeCombo->setStyleSheet(comboStyle);
 
-    // Waveform accent
     if (m_waveformWidget) m_waveformWidget->setAccentColor(accentColor);
     if (m_fretboardWidget) m_fretboardWidget->setAccentColor(accentColor);
     if (m_volumeKnob) m_volumeKnob->setAccentColor(accentColor);
 
-    // Force repaint
+    // Theme toggle button also turns red in error state
+    if (m_themeToggleBtn) {
+        if (errorRed) {
+            m_themeToggleBtn->setStyleSheet(
+                "QPushButton { background-color: #ef4444; color: #09090b; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; }"
+            );
+            m_themeToggleBtn->setText("ERROR");
+        } else {
+            m_themeToggleBtn->setStyleSheet(
+                "QPushButton { background-color: #f59e0b; color: #09090b; border: none; border-radius: 4px; font-weight: bold; font-size: 10px; }"
+                "QPushButton:checked { background-color: #22d3ee; color: #09090b; }"
+            );
+            m_themeToggleBtn->setText(cyan ? "CYAN" : "ORANGE");
+        }
+    }
+
     update();
 }
 
@@ -336,14 +427,10 @@ void MainWindow::updatePreprocessedAudioAsync() {
     if (m_decodedSamples.isEmpty()) return;
     if (m_processing) return; // already running
 
-    // If currently playing, pause and grey out play button; remember to resume after processing
     m_resumeAfterProcess = false;
-    if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
-        m_audioSink->stop();
-        if (m_playbackTimer) m_playbackTimer->stop();
-
-        qint64 elapsedMs = m_playbackStartTimeMs + (m_audioSink->processedUSecs() / 1000);
-        m_currentPositionSec = elapsedMs / 1000.0;
+    if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+        m_currentPositionSec = m_player->position() / 1000.0;  // before pause
+        m_player->pause();
         m_isPaused = true;
         m_resumeAfterProcess = true;
 
@@ -358,6 +445,10 @@ void MainWindow::updatePreprocessedAudioAsync() {
     if (m_playPauseBtn) {
         m_playPauseBtn->setEnabled(false);
     }
+    // Disable speed and pitch buttons while processing
+    for (int i = 0; i < 7; ++i) if (m_speedButtons[i]) m_speedButtons[i]->setEnabled(false);
+    for (int i = 0; i < 9; ++i) if (m_pitchButtons[i]) m_pitchButtons[i]->setEnabled(false);
+
     if (m_processBar) {
         m_processBar->setVisible(true);
         m_processBar->setRange(0, 0); // busy
@@ -365,7 +456,7 @@ void MainWindow::updatePreprocessedAudioAsync() {
     }
     if (m_statusBar) {
         m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #ffffff; font-family: monospace; font-size: 12px; }");
-        m_statusBar->showMessage("Processing chords, will play new tempo / pitch as soon as processing is done...");
+        m_statusBar->showMessage("Processing audio effects...");
     }
 
     float tempo = m_currentSpeed;
@@ -373,31 +464,73 @@ void MainWindow::updatePreprocessedAudioAsync() {
     QVector<float> samplesCopy = m_decodedSamples; // copy for thread safety
 
     QThread* thread = QThread::create([this, tempo, pitchSt, samplesCopy]() {
-        // Run SoundTouch in background
-        soundtouch::SoundTouch st;
-        st.setSampleRate(44100);
-        st.setChannels(1);
-        st.setTempo(tempo);
-        st.setPitchSemiTones(pitchSt);
-        st.putSamples(samplesCopy.constData(), samplesCopy.size());
-        st.flush();
-
         QByteArray pcmData;
-        int bufferSize = 4096;
-        std::vector<float> floatBuffer(bufferSize);
-        int received = 0;
-        do {
-            received = st.receiveSamples(floatBuffer.data(), bufferSize);
-            if (received > 0) {
-                int bytesToWrite = received * sizeof(qint16);
-                pcmData.resize(pcmData.size() + bytesToWrite);
-                qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data() + pcmData.size() - bytesToWrite);
-                for (int i = 0; i < received; ++i) {
-                    float sample = std::max(-1.0f, std::min(1.0f, floatBuffer[i]));
-                    outPtr[i] = static_cast<qint16>(sample * 32767.0f);
-                }
+
+        if (qFuzzyCompare(tempo, 1.0f) && qFuzzyIsNull(pitchSt)) {
+            pcmData.resize(samplesCopy.size() * sizeof(qint16));
+            qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data());
+            for (int i = 0; i < samplesCopy.size(); ++i) {
+                float sample = std::max(-1.0f, std::min(1.0f, samplesCopy[i]));
+                outPtr[i] = static_cast<qint16>(sample * 32767.0f);
             }
-        } while (received > 0);
+        } else {
+            soundtouch::SoundTouch st;
+            st.setSampleRate(44100);
+            st.setChannels(1);
+            st.setTempo(tempo);
+            st.setPitchSemiTones(pitchSt);
+
+            // Faster processing (slight quality trade-off)
+            st.setSetting(SETTING_USE_QUICKSEEK, 1);
+            st.setSetting(SETTING_SEQUENCE_MS, 40);
+            st.setSetting(SETTING_SEEKWINDOW_MS, 15);
+            st.setSetting(SETTING_OVERLAP_MS, 8);
+
+            // Pre-allocate output (tempo can change length)
+            pcmData.reserve(static_cast<int>(samplesCopy.size() * sizeof(qint16) * (tempo > 1.0f ? tempo : 1.0f) + 65536));
+
+            const int chunk = 8192;
+            std::vector<float> floatBuffer(chunk);
+            int offset = 0;
+            const int total = samplesCopy.size();
+
+            while (offset < total) {
+                int n = std::min(chunk, total - offset);
+                st.putSamples(samplesCopy.constData() + offset, n);
+                offset += n;
+
+                int received;
+                do {
+                    received = st.receiveSamples(floatBuffer.data(), chunk);
+                    if (received > 0) {
+                        int bytesToWrite = received * static_cast<int>(sizeof(qint16));
+                        int oldSize = pcmData.size();
+                        pcmData.resize(oldSize + bytesToWrite);
+                        qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data() + oldSize);
+                        for (int i = 0; i < received; ++i) {
+                            float sample = std::max(-1.0f, std::min(1.0f, floatBuffer[i]));
+                            outPtr[i] = static_cast<qint16>(sample * 32767.0f);
+                        }
+                    }
+                } while (received > 0);
+            }
+
+            st.flush();
+            int received;
+            do {
+                received = st.receiveSamples(floatBuffer.data(), chunk);
+                if (received > 0) {
+                    int bytesToWrite = received * static_cast<int>(sizeof(qint16));
+                    int oldSize = pcmData.size();
+                    pcmData.resize(oldSize + bytesToWrite);
+                    qint16 *outPtr = reinterpret_cast<qint16*>(pcmData.data() + oldSize);
+                    for (int i = 0; i < received; ++i) {
+                        float sample = std::max(-1.0f, std::min(1.0f, floatBuffer[i]));
+                        outPtr[i] = static_cast<qint16>(sample * 32767.0f);
+                    }
+                }
+            } while (received > 0);
+        }
 
         // Deliver result on main thread
         QMetaObject::invokeMethod(this, [this, pcmData]() {
@@ -408,40 +541,53 @@ void MainWindow::updatePreprocessedAudioAsync() {
                 m_processBar->setVisible(false);
             }
 
-            // Re-analyze chords on the pitch-shifted audio and update the waveform
-            if (!pcmData.isEmpty() && m_waveformWidget) {
-                QVector<float> pitchedSamples;
-                pitchedSamples.reserve(pcmData.size() / sizeof(qint16));
-                const qint16* src = reinterpret_cast<const qint16*>(pcmData.constData());
-                int count = pcmData.size() / sizeof(qint16);
-                for (int i = 0; i < count; ++i)
-                    pitchedSamples.append(src[i] / 32768.0f);
+            if (m_waveformWidget) {
+                m_waveformWidget->setPitchShift(m_currentPitch);
+            }
 
-                double totalDurationSec = pitchedSamples.size() / 44100.0;
+            // Recalculate chords only when pitch changed
+            if (m_reanalyzeChordsAfterProcess) {
+                m_reanalyzeChordsAfterProcess = false;
+
+                // Convert processed PCM (int16) back to float for analysis
+                QVector<float> shifted;
+                shifted.reserve(pcmData.size() / static_cast<int>(sizeof(qint16)));
+                const qint16 *src = reinterpret_cast<const qint16*>(pcmData.constData());
+                int n = pcmData.size() / static_cast<int>(sizeof(qint16));
+                for (int i = 0; i < n; ++i) {
+                    shifted.append(src[i] / 32768.0f);
+                }
+
                 QString hopStr = m_hopSizeCombo ? m_hopSizeCombo->currentText() : "1s";
                 hopStr.remove('s');
                 double hopSec = hopStr.toDouble();
                 int fftVal = m_fftSizes[m_fftSizeCombo ? m_fftSizeCombo->currentIndex() : 4];
+                double dur = shifted.isEmpty() ? 0.0 : shifted.size() / 44100.0;
 
-                if (m_statusBar) m_statusBar->showMessage("Extracting chords for new pitch...");
-                m_extractedChords = analyzeAudioChords(pitchedSamples, totalDurationSec, 44100, hopSec, fftVal);
-                m_waveformWidget->setChords(m_extractedChords);
-                if (m_waveformWidget) m_waveformWidget->setPitchShift(m_currentPitch);
+                m_extractedChords = analyzeAudioChords(shifted, dur, 44100, hopSec, fftVal);
+                if (m_waveformWidget) {
+                    m_waveformWidget->setChords(m_extractedChords);
+                }
+                qDebug() << "Pitch change: reanalyzed chords, markers:" << m_extractedChords.size();
             }
 
-            if (m_statusBar) { m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }"); m_statusBar->showMessage("Ready..."); }
+            if (m_statusBar) {
+                m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
+                m_statusBar->showMessage("Ready...");
+            }
 
-            // Re-enable play button
             if (m_playPauseBtn) {
                 m_playPauseBtn->setEnabled(true);
             }
+            // Re-enable speed and pitch buttons
+            for (int i = 0; i < 7; ++i) if (m_speedButtons[i]) m_speedButtons[i]->setEnabled(true);
+            for (int i = 0; i < 9; ++i) if (m_pitchButtons[i]) m_pitchButtons[i]->setEnabled(true);
 
-            // If we were playing before processing, reload buffer, restore position and resume
+            // Resume from the position we paused at
             if (m_resumeAfterProcess) {
                 m_resumeAfterProcess = false;
-                // togglePlayPause will recreate the buffer from m_preprocessedPcmData
-                // and seek to the saved m_currentPositionSec (accounting for tempo)
-                togglePlayPause();
+                m_isPaused = true;          // so togglePlayPause seeks to m_currentPositionSec
+                togglePlayPause();          // starts playback from that position
             }
         }, Qt::QueuedConnection);
     });
@@ -449,6 +595,7 @@ void MainWindow::updatePreprocessedAudioAsync() {
     connect(thread, &QThread::finished, thread, &QThread::deleteLater);
     thread->start();
 }
+
 
 // ========================================================
 // MAIN WINDOW IMPLEMENTATION
@@ -463,13 +610,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowIcon(createAppIcon());
 
     m_playbackTimer = new QTimer(this);
-        connect(m_playbackTimer, &QTimer::timeout, [this]() {
-            if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
-                // Ensure audioBufferDevice exists and is open before querying
-                qint64 elapsedMs = m_playbackStartTimeMs + (m_audioSink->processedUSecs() / 1000);
-                updatePosition(elapsedMs);
-            }
-        });
+    connect(m_player, &QMediaPlayer::positionChanged, this, &MainWindow::updatePosition);
+    connect(m_player, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
+        if (state == QMediaPlayer::StoppedState && m_playPauseBtn) {
+            m_playPauseBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+        }
+    });
     loadSettings();
     loadLastOpenedFile();
 }
@@ -556,35 +702,18 @@ void MainWindow::setupUi() {
     connect(m_waveformWidget, &GLWaveformWidget::scrollOffsetChanged, m_waveformScrollBar, &QScrollBar::setValue);
 
     connect(m_waveformWidget, &GLWaveformWidget::seekRequested, [this](double timeSeconds) {
-        double totalSec = m_player ? (m_player->duration() / 1000.0) : 0.0;
-        if (totalSec <= 0 && !m_decodedSamples.isEmpty()) {
-            totalSec = m_decodedSamples.size() / 44100.0;
-        }
-
+        double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / 44100.0);
         m_currentPositionSec = qMax(0.0, qMin(timeSeconds, totalSec));
         m_isPaused = false;
-        qint64 posMs = static_cast<qint64>(m_currentPositionSec * 1000);
 
-        if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
-            m_audioSink->stop();
-            if (m_playbackTimer) m_playbackTimer->stop();
+        float tempo = m_currentSpeed;
+        double effectiveSec = m_currentPositionSec * tempo;
+        qint64 posMs = static_cast<qint64>(qMax(0.0, effectiveSec) * 1000);
 
-            float tempo = m_currentSpeed;
-            double effectiveSec = m_currentPositionSec * tempo;
-            qint64 byteOffset = static_cast<qint64>(effectiveSec * 44100.0 * sizeof(qint16));
-            byteOffset = (byteOffset / sizeof(qint16)) * sizeof(qint16);
-            byteOffset = qMax(static_cast<qint64>(0), qMin(byteOffset, static_cast<qint64>(m_preprocessedPcmData.size())));
-
-            if (m_audioBufferDevice) {
-                m_audioBufferDevice->seek(byteOffset);
-            }
-            m_playbackStartTimeMs = static_cast<qint64>(m_currentPositionSec * 1000);
-
-            m_audioSink->start(m_audioBufferDevice);
-            if (m_playbackTimer) m_playbackTimer->start(50);
-        } else {
-            updatePosition(posMs);
+        if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+            m_player->setPosition(posMs);
         }
+        updatePosition(posMs);
     });
 
     connect(m_waveformWidget, &GLWaveformWidget::selectionChanged, this, &MainWindow::handleSelectionChanged);
@@ -609,7 +738,7 @@ void MainWindow::setupUi() {
         m_speedButtons[i] = new QPushButton(speedLabels[i], this);
         m_speedButtons[i]->setCheckable(true);
         m_speedButtons[i]->setStyleSheet(btnStyle);
-        if (i == 4) m_speedButtons[i]->setChecked(true); // default 1.0
+        if (i == 4) m_speedButtons[i]->setChecked(true);
         speedBtnLayout->addWidget(m_speedButtons[i]);
 
         connect(m_speedButtons[i], &QPushButton::clicked, this, [this, i, speedValues]() {
@@ -649,13 +778,14 @@ void MainWindow::setupUi() {
         m_pitchButtons[i] = new QPushButton(pitchLabels[i], this);
         m_pitchButtons[i]->setCheckable(true);
         m_pitchButtons[i]->setStyleSheet(pitchBtnStyle);
-        if (i == 4) m_pitchButtons[i]->setChecked(true); // default 0
+        if (i == 4) m_pitchButtons[i]->setChecked(true);
         pitchBtnLayout->addWidget(m_pitchButtons[i]);
 
         connect(m_pitchButtons[i], &QPushButton::clicked, this, [this, i, pitchValues]() {
             for (int j = 0; j < 9; ++j)
                 m_pitchButtons[j]->setChecked(j == i);
             m_currentPitch = pitchValues[i];
+            m_reanalyzeChordsAfterProcess = true;   // only pitch recalculates chords
             QString sign = (pitchValues[i] > 0) ? "+" : "";
             m_pitchValueLabel->setText(QString("Pitch: %1%2 st").arg(sign).arg(pitchValues[i], 0, 'f', 1));
             if (m_waveformWidget) m_waveformWidget->setPitchShift(m_currentPitch);
@@ -810,13 +940,9 @@ void MainWindow::setupUi() {
     connect(m_playPauseBtn, &QPushButton::clicked, this, &MainWindow::togglePlayPause);
     connect(m_stopBtn, &QPushButton::clicked, this, &MainWindow::stopAudio);
 
-
-
-
-
     connect(m_volumeKnob, &QDial::valueChanged, [this](int val) {
         float vol = val / 100.0f;
-        if (m_audioSink) m_audioSink->setVolume(vol);
+        if (m_audioOutput) m_audioOutput->setVolume(vol);
         m_volumeValueLabel->setText(QString("Volume: %1%").arg(val));
     });
 
@@ -830,16 +956,20 @@ void MainWindow::setupUi() {
             double totalDurationSec = m_decodedSamples.size() / 44100.0;
             if (m_statusBar) m_statusBar->showMessage("Extracting chords, please wait...");
             m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, 44100, hopSec, fftVal);
-            if (m_statusBar) { m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }"); m_statusBar->showMessage("Ready..."); }
-            m_waveformWidget->setChords(m_extractedChords);
-                if (m_waveformWidget) m_waveformWidget->setPitchShift(m_currentPitch);
+            if (m_statusBar && !m_statusBar->currentMessage().contains("ERROR: Could not load Vamp")) {
+                m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
+                m_statusBar->showMessage("Ready...");
+            }
+            if (m_waveformWidget) {
+                m_waveformWidget->setChords(m_extractedChords);
+                m_waveformWidget->setPitchShift(m_currentPitch);
+            }
         }
     };
 
     connect(m_hopSizeCombo, &QComboBox::currentIndexChanged, reanalyzeChords);
     connect(m_fftSizeCombo, &QComboBox::currentIndexChanged, reanalyzeChords);
 
-    // Status bar
     m_statusBar = new QStatusBar(this);
     m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
     m_statusBar->showMessage("Ready...");
@@ -860,11 +990,10 @@ void MainWindow::setupUi() {
 
     setStatusBar(m_statusBar);
 
-    // 2-pixel processing progress bar under the status bar
     m_processBar = new QProgressBar(this);
     m_processBar->setFixedHeight(2);
     m_processBar->setTextVisible(false);
-    m_processBar->setRange(0, 0); // indeterminate / busy indicator
+    m_processBar->setRange(0, 0);
     m_processBar->setStyleSheet(
         "QProgressBar { border: none; background-color: #09090b; }"
         "QProgressBar::chunk { background-color: #f59e0b; }"
@@ -876,37 +1005,37 @@ void MainWindow::setupUi() {
 void MainWindow::resizeEvent(QResizeEvent *event) {
     QMainWindow::resizeEvent(event);
     if (m_processBar) {
-        // Position the 2px bar at the very bottom of the window, under the status bar
         m_processBar->setGeometry(0, height() - 2, width(), 2);
     }
 }
 
 void MainWindow::updatePosition(qint64 position) {
+    // Ignore a jump-to-zero that some backends emit on pause
+    if (m_isPaused && position < 50 && m_currentPositionSec > 0.1) {
+        return;
+    }
+
     double currentSec = position / 1000.0;
     double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / 44100.0);
 
-    // Fixed: Only trigger loop when currentSec reaches m_loopEndSec (removed currentSec < m_loopStartSec check)
     if (m_repeatBtn->isChecked() && m_loopStartSec >= 0 && m_loopEndSec > m_loopStartSec) {
         if (currentSec >= m_loopEndSec) {
             m_currentPositionSec = m_loopStartSec;
-            qint64 posMs = static_cast<qint64>(m_loopStartSec * 1000);
-            if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
-                m_audioSink->stop();
-                float tempo = m_currentSpeed;
-                double effectiveSec = m_loopStartSec * tempo;
-                qint64 byteOffset = static_cast<qint64>(effectiveSec * 44100.0 * sizeof(qint16));
-                byteOffset = (byteOffset / sizeof(qint16)) * sizeof(qint16);
-                if (m_audioBufferDevice) m_audioBufferDevice->seek(byteOffset);
-                m_playbackStartTimeMs = posMs;
-                m_audioSink->start(m_audioBufferDevice);
+            float tempo = m_currentSpeed;
+            double effectiveSec = m_loopStartSec * tempo;
+            qint64 posMs = static_cast<qint64>(qMax(0.0, effectiveSec) * 1000);
+            if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+                m_player->setPosition(posMs);
             }
             currentSec = m_loopStartSec;
         }
     }
 
-     m_waveformWidget->setPlaybackPosition(currentSec);
+    if (m_waveformWidget) {
+        m_waveformWidget->setPlaybackPosition(currentSec);
+    }
 
-    if (!m_extractedChords.isEmpty()) {
+    if (!m_extractedChords.isEmpty() && m_fretboardWidget) {
         QString currentChord = m_extractedChords.first().chordName;
         QString nextChord = (m_extractedChords.size() > 1) ? m_extractedChords[1].chordName : "";
 
@@ -928,11 +1057,13 @@ void MainWindow::updatePosition(qint64 position) {
     int totM = static_cast<int>(totalSec) / 60;
     int totS = static_cast<int>(totalSec) % 60;
 
-    m_timeDisplay->setText(QString("%1:%2 / %3:%4")
-                           .arg(curM, 2, 10, QChar('0'))
-                           .arg(curS, 2, 10, QChar('0'))
-                           .arg(totM, 2, 10, QChar('0'))
-                           .arg(totS, 2, 10, QChar('0')));
+    if (m_timeDisplay) {
+        m_timeDisplay->setText(QString("%1:%2 / %3:%4")
+                               .arg(curM, 2, 10, QChar('0'))
+                               .arg(curS, 2, 10, QChar('0'))
+                               .arg(totM, 2, 10, QChar('0'))
+                               .arg(totS, 2, 10, QChar('0')));
+    }
 }
 
 void MainWindow::handleSelectionChanged(double startSec, double endSec) {
@@ -943,123 +1074,88 @@ void MainWindow::handleSelectionChanged(double startSec, double endSec) {
     } else {
         m_loopStartSec = -1.0;
         m_loopEndSec = -1.0;
-        //m_repeatBtn->setChecked(false);
         m_repeatBtn->setEnabled(false);
     }
 }
 
 void MainWindow::onTimelineSliderChanged(int value) {
     float fraction = value / 100.0f;
-    m_timelineValueLabel->setText(QString("%1 (%2%)").arg(fraction, 0, 'f', 1).arg(value));
-    m_waveformWidget->setVisibleFraction(fraction);
+    if (m_timelineValueLabel) {
+        m_timelineValueLabel->setText(QString("%1 (%2%)").arg(fraction, 0, 'f', 1).arg(value));
+    }
+    if (m_waveformWidget) {
+        m_waveformWidget->setVisibleFraction(fraction);
+    }
 }
 
 void MainWindow::togglePlayPause() {
     if (m_decodedSamples.isEmpty()) return;
 
-    if (m_audioSink && m_audioSink->state() == QAudio::ActiveState) {
-        m_audioSink->stop();
-        if (m_playbackTimer) m_playbackTimer->stop();
-
-        qint64 elapsedMs = m_playbackStartTimeMs + (m_audioSink->processedUSecs() / 1000);
-        m_currentPositionSec = elapsedMs / 1000.0;
+    // Pause if currently playing — capture position BEFORE pause
+    if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
+        m_currentPositionSec = m_player->position() / 1000.0;
+        m_player->pause();
         m_isPaused = true;
-
-        for (int i = 0; i < 7; ++i) if (m_speedButtons[i]) m_speedButtons[i]->setEnabled(true);
-        for (int i = 0; i < 9; ++i) if (m_pitchButtons[i]) m_pitchButtons[i]->setEnabled(true);
-
-
-
-        m_playPauseBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+        if (m_waveformWidget) {
+            m_waveformWidget->setPlaybackPosition(m_currentPositionSec);
+        }
+        if (m_playPauseBtn) {
+            m_playPauseBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+        }
         return;
     }
 
     float tempo = m_currentSpeed;
     float pitchSt = m_currentPitch;
 
-    QAudioDevice defaultDeviceInfo = QMediaDevices::defaultAudioOutput();
-    QAudioFormat format = defaultDeviceInfo.preferredFormat();
-    if (format.sampleRate() <= 0) format.setSampleRate(44100);
-    format.setChannelCount(1);
-    format.setSampleFormat(QAudioFormat::Int16);
-
-    if (!m_audioSink) {
-        m_audioSink = new QAudioSink(defaultDeviceInfo, format, this);
-    } else {
-        m_audioSink->stop();
-    }
-
-    if (m_volumeKnob) {
-        m_audioSink->setVolume(m_volumeKnob->value() / 100.0f);
-    }
-
     if (m_preprocessedPcmData.isEmpty()) {
         QApplication::setOverrideCursor(Qt::WaitCursor);
         m_preprocessedPcmData = processAudioWithSoundTouch(tempo, pitchSt);
         QApplication::restoreOverrideCursor();
     }
-
     if (m_preprocessedPcmData.isEmpty()) return;
 
-    if (m_audioBufferDevice) {
-        m_audioBufferDevice->close();
-        delete m_audioBufferDevice;
-    }
-    m_audioBufferDevice = new QBuffer(this);
-    m_audioBufferDevice->setData(m_preprocessedPcmData);
-    if (!m_audioBufferDevice->open(QIODevice::ReadOnly)) return;
+    // Write current processed PCM to a temp WAV
+    if (!writePcmToTempWav(m_preprocessedPcmData, 44100, 1)) return;
 
-    qint64 byteOffset = 0;
-    if (m_isPaused) {
-        double effectiveSec = m_currentPositionSec * tempo;
-        byteOffset = static_cast<qint64>(effectiveSec * 44100.0 * sizeof(qint16));
-    } else {
-        if (m_loopStartSec >= 0 && m_loopEndSec > m_loopStartSec) {
-            m_currentPositionSec = m_loopStartSec;
-        } else if (m_currentPositionSec < 0.0) {
-            m_currentPositionSec = 0.0;
+    if (!m_player) return;
+    m_player->setSource(QUrl::fromLocalFile(m_tempWavPath));
+
+    // Seek to the current waveform cursor after the media is loaded
+    double startSec = m_currentPositionSec;
+    if (startSec < 0.0) startSec = 0.0;
+    double effectiveSec = startSec * tempo;
+    qint64 posMs = static_cast<qint64>(qMax(0.0, effectiveSec) * 1000);
+
+    // setPosition is ignored until LoadedMedia; defer it
+    QMetaObject::Connection *conn = new QMetaObject::Connection;
+    *conn = connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
+                    [this, posMs, conn](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::LoadedMedia || status == QMediaPlayer::BufferedMedia) {
+            m_player->setPosition(posMs);
+            disconnect(*conn);
+            delete conn;
         }
-        double effectiveSec = m_currentPositionSec * tempo;
-        byteOffset = static_cast<qint64>(effectiveSec * 44100.0 * sizeof(qint16));
+    });
+
+    if (m_volumeKnob) {
+        m_audioOutput->setVolume(m_volumeKnob->value() / 100.0f);
     }
 
-    byteOffset = (byteOffset / sizeof(qint16)) * sizeof(qint16);
-    byteOffset = qMax(static_cast<qint64>(0), qMin(byteOffset, static_cast<qint64>(m_preprocessedPcmData.size())));
-
-    m_audioBufferDevice->seek(byteOffset);
-    m_playbackStartTimeMs = static_cast<qint64>(m_currentPositionSec * 1000);
-
-    m_audioSink->start(m_audioBufferDevice);
-
-    if (m_audioSink->error() == QAudio::NoError) {
-        m_isPaused = false;
-        if (m_playbackTimer) m_playbackTimer->start(50);
-
-        // Speed/Pitch buttons stay enabled during playback
-        QString greyStyle = "QSlider::handle:horizontal { background: #52525b; } QSlider::sub-page:horizontal { background: #52525b; }";
-
-
-
+    m_player->play();
+    m_isPaused = false;
+    if (m_playPauseBtn) {
         m_playPauseBtn->setIcon(style()->standardIcon(QStyle::SP_MediaPause));
     }
 }
 
 void MainWindow::stopAudio() {
-    if (m_playbackTimer) {
-        m_playbackTimer->stop();
-    }
-    if (m_audioSink) {
-        m_audioSink->stop();
-    }
-    if (m_audioBufferDevice) {
-        m_audioBufferDevice->close();
+    if (m_player) {
+        m_player->stop();
     }
     m_isPaused = false;
     m_currentPositionSec = 0.0;
     m_resumeAfterProcess = false;
-
-    for (int i = 0; i < 7; ++i) if (m_speedButtons[i]) m_speedButtons[i]->setEnabled(true);
-    for (int i = 0; i < 9; ++i) if (m_pitchButtons[i]) m_pitchButtons[i]->setEnabled(true);
 
     if (m_playPauseBtn) {
         m_playPauseBtn->setEnabled(true);
@@ -1069,7 +1165,6 @@ void MainWindow::stopAudio() {
 }
 
 void MainWindow::updateAudioEffects() {
-    // Offload heavy SoundTouch processing to background thread
     updatePreprocessedAudioAsync();
 }
 
@@ -1124,21 +1219,30 @@ void MainWindow::handleDecoderFinished() {
     double totalDurationSec = m_decodedSamples.size() / 44100.0;
 
     int detectedBpm = detectBpm(m_decodedSamples, 44100);
-    m_tempoGroup->setTitle(QString("TEMPO %1").arg(detectedBpm));
-    m_waveformWidget->setBpm(detectedBpm);
+    if (m_tempoGroup) m_tempoGroup->setTitle(QString("TEMPO %1").arg(detectedBpm));
+    if (m_waveformWidget) m_waveformWidget->setBpm(detectedBpm);
 
-    QString hopStr = m_hopSizeCombo->currentText();
+    QString hopStr = m_hopSizeCombo ? m_hopSizeCombo->currentText() : "1s";
     hopStr.remove('s');
     double hopSec = hopStr.toDouble();
-    int fftVal = m_fftSizes[m_fftSizeCombo->currentIndex()];
+    int fftVal = m_fftSizes[m_fftSizeCombo ? m_fftSizeCombo->currentIndex() : 4];
 
     if (m_statusBar) m_statusBar->showMessage("Extracting chords, please wait...");
-            m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, 44100, hopSec, fftVal);
-            if (m_statusBar) { m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }"); m_statusBar->showMessage("Ready..."); }
+    m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, 44100, hopSec, fftVal);
+    qDebug() << "Chord extraction finished. Markers found:" << m_extractedChords.size();
 
-    m_waveformWidget->setAudioBuffer(m_decodedSamples, totalDurationSec, 44100);
-    m_waveformWidget->setChords(m_extractedChords);
-                if (m_waveformWidget) m_waveformWidget->setPitchShift(m_currentPitch);
+    // Only reset status if no plugin error occurred (error path already set red status)
+    if (m_statusBar && !m_statusBar->currentMessage().contains("ERROR: Could not load Vamp")) {
+        m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
+        m_statusBar->showMessage("Ready...");
+    }
+
+    if (m_waveformWidget) {
+        m_waveformWidget->setAudioBuffer(m_decodedSamples, totalDurationSec, 44100);
+        m_waveformWidget->setChords(m_extractedChords);
+        m_waveformWidget->setPitchShift(m_currentPitch);
+        qDebug() << "setChords called with" << m_extractedChords.size() << "markers";
+    }
 
     updatePreprocessedAudio();
     QApplication::restoreOverrideCursor();
@@ -1175,7 +1279,9 @@ void MainWindow::updateRecentFileActions() {
         m_recentFileActions[j]->setVisible(false);
     }
 
-    m_recentFilesMenu->setEnabled(numRecentFiles > 0);
+    if (m_recentFilesMenu) {
+        m_recentFilesMenu->setEnabled(numRecentFiles > 0);
+    }
 }
 
 void MainWindow::openRecentFile() {
@@ -1303,7 +1409,6 @@ void MainWindow::saveSettings() {
 void MainWindow::loadSettings() {
     QSettings settings("WebRiffStudio", "WebRiffStudio");
 
-    // Theme
     bool cyan = settings.value("theme/cyan", false).toBool();
     m_cyanTheme = cyan;
     if (m_themeToggleBtn) {
@@ -1312,7 +1417,6 @@ void MainWindow::loadSettings() {
     }
     applyTheme(cyan);
 
-    // Power / Chord mode
     bool power = settings.value("fingering/power", false).toBool();
     if (m_fingeringToggleBtn) {
         m_fingeringToggleBtn->setChecked(power);
@@ -1320,7 +1424,6 @@ void MainWindow::loadSettings() {
         if (m_fretboardWidget) m_fretboardWidget->setFingeringMode(power);
     }
 
-    // Hop size & FFT size
     int hopIdx = settings.value("chords/hopSizeIndex", 1).toInt();
     int fftIdx = settings.value("chords/fftSizeIndex", 4).toInt();
     if (m_hopSizeCombo && hopIdx >= 0 && hopIdx < m_hopSizeCombo->count())

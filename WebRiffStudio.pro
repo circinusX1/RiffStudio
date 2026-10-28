@@ -29,8 +29,9 @@ HEADERS += \
 # sudo apt install -y build-essential cmake pkg-config git \
 #                     libfftw3-dev libyaml-cpp-dev libtag1-dev \
 #                     libsamplerate0-dev libavcodec-dev libavformat-dev \
-#                     python3 python3-pip
-
+#                     python3 python3-pip  libeigen3-dev
+# sudo apt update
+#  sudo apt install libsoundtouch-dev
 #   for: essentia.h
 # 1. Clean previous build artifacts
 #   python3 waf clean
@@ -50,12 +51,14 @@ HEADERS += \
 #
 
 unix:!macx {
-    # Include paths for Essentia and Eigen3
+    # Include paths for Eigen3, SoundTouch, and Vamp Host SDK
     INCLUDEPATH += /usr/local/include \
                    /usr/include/eigen3
-    INCLUDEPATH += /usr/include/soundtouch
+    INCLUDEPATH += /usr/include/soundtouch \
+                   /usr/include/vamp-hostsdk
 
-    LIBS += -L/usr/local/lib -lSoundTouch -lessentia -lfftw3 -lyaml-cpp
+    # Removed -lessentia, added -lvamp-hostsdk
+    LIBS += -L/usr/local/lib -lSoundTouch -lvamp-hostsdk -lfftw3 -lyaml-cpp
 }
 
 win32 {
@@ -65,7 +68,7 @@ win32 {
     INCLUDEPATH += C:/vcpkg/installed/x64-windows/include/soundtouch
 
     LIBS += -LC:/vcpkg/installed/x64-windows/lib \
-            --lSoundTouch -lessentia -lfftw3f-3 -lyaml-cpp
+            --lSoundTouch -lfftw3f-3 -lyaml-cpp
             #dpkg -L libsoundtouch-dev | grep -E '\.so|\.a'
 }
 
@@ -73,7 +76,19 @@ win32 {
 # git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
 # cd C:\vcpkg
 # .\bootstrap-vcpkg.bat
-#
+# sudo apt install libvamp-hostsdk1v5 vamp-plugin-sdk
 # .\vcpkg install fftw3:x64-windows yaml-cpp:x64-windows essentia:x64-windows
 # .\vcpkg install soundtouch:x64-windows
+
+
+# Copy the binary to ./bin after a successful build
+BINDIR = $$PWD/bin
+
+unix:!macx {
+    QMAKE_POST_LINK += mkdir -p $$BINDIR && cp -f $$OUT_PWD/$$TARGET $$BINDIR/
+}
+
+win32 {
+    QMAKE_POST_LINK += $$quote(if not exist $$shell_path($$BINDIR) mkdir $$shell_path($$BINDIR) && copy /Y $$shell_path($$OUT_PWD/$$TARGET.exe) $$shell_path($$BINDIR/))
+}
 
