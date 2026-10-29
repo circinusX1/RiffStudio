@@ -92,3 +92,6 @@ win32 {
     QMAKE_POST_LINK += $$quote(if not exist $$shell_path($$BINDIR) mkdir $$shell_path($$BINDIR) && copy /Y $$shell_path($$OUT_PWD/$$TARGET.exe) $$shell_path($$BINDIR/))
 }
 
+DISTFILES += \
+    bin/run.sh
+

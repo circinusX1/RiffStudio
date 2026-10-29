@@ -66,6 +66,7 @@ private:
     void updatePreprocessedAudio();
     void updatePreprocessedAudioAsync();
     bool writePcmToTempWav(const QByteArray &pcm, int sampleRate, int channels);
+    void applyGraphicEQ(QVector<float> &samples, int sampleRate);
     void applyTheme(bool cyan, bool errorRed = false);
     void saveSettings();
     void loadSettings();
@@ -112,6 +113,13 @@ private:
     QPushButton *m_fingeringToggleBtn = nullptr;
     QLabel *m_fingeringLabel = nullptr;
 
+    // Filters Group & Sliders
+    // Filters Group & Toggle Buttons
+    QGroupBox *m_filtersGroup = nullptr;
+    QPushButton *m_filterButtons[9] = {nullptr};
+    bool m_filtersEnabled = false;
+    bool m_filterStates[9] = {false}; // false = Up (0 dB), true = Down (-60 dB)
+
     QMenu *m_recentFilesMenu = nullptr;
     static const int MaxRecentFiles = 5;
     QAction *m_recentFileActions[MaxRecentFiles];
@@ -131,6 +139,9 @@ private:
     bool m_resumeAfterProcess = false;
     bool m_reanalyzeChordsAfterProcess = false;
     qint64 m_playbackStartTimeMs = 0;
+
+
+
 };
 
 #endif // MAINWINDOW_H
