@@ -11,28 +11,36 @@
 // Call this once at startup, before any chord analysis
 static void setupVampPluginPath()
 {
+    // 1. Check if VAMP_PATH is already set by the user or system
+    const char* existingPath = std::getenv("VAMP_PATH");
+
+    // If it exists and is not an empty string, respect it and exit early
+    if (existingPath && existingPath[0] != '\0') {
+        qDebug() << "VAMP_PATH already set to:" << existingPath;
+        return;
+    }
+
+    // 2. Fall back to your local application plugins directory
     QString appDir = QCoreApplication::applicationDirPath();
     QString pluginsDir = QDir(appDir).filePath("plugins");
 
-    // Create the folder if it doesn't exist (optional)
-    QDir().mkpath(pluginsDir);
-
 #ifdef Q_OS_WIN
-    // Windows: use _putenv_s (or setenv if available)
+    // Windows: Use _putenv_s (automatically fails if already exists, but we checked anyway)
     _putenv_s("VAMP_PATH", pluginsDir.toLocal8Bit().constData());
 #else
-    // Linux / macOS
-    setenv("VAMP_PATH", pluginsDir.toLocal8Bit().constData(), 1);
+    // Linux / macOS: Set overwrite flag (third argument) to 0 as a secondary safety
+    setenv("VAMP_PATH", pluginsDir.toLocal8Bit().constData(), 0);
 #endif
 
-    qDebug() << "VAMP_PATH set to:" << pluginsDir;
+    qDebug() << "VAMP_PATH fallback set to:" << pluginsDir;
 }
+
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
     // Set VAMP_PATH so Chordino / nnls-chroma plugins are found next to the binary
-    //setupVampPluginPath();
+    setupVampPluginPath();
 
     // Apply dark studio theme
     app.setStyle(QStyleFactory::create("Fusion"));
