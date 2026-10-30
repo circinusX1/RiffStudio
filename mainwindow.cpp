@@ -275,7 +275,7 @@ QByteArray MainWindow::processAudioWithSoundTouch(float tempo, float pitch) {
 
     QVector<float> processedSamples = m_decodedSamples;
     if (m_filtersEnabled) {
-        applyGraphicEQ(processedSamples, 44100);
+        applyGraphicEQ(processedSamples, m_sampleRate);
     }
 
     if (qFuzzyCompare(tempo, 1.0f) && qFuzzyIsNull(pitch) && !m_filtersEnabled) {
@@ -290,7 +290,7 @@ QByteArray MainWindow::processAudioWithSoundTouch(float tempo, float pitch) {
     }
 
     soundtouch::SoundTouch st;
-    st.setSampleRate(44100);
+    st.setSampleRate(m_sampleRate);
     st.setChannels(1);
     st.setTempo(tempo);
     st.setPitchSemiTones(pitch);
@@ -538,7 +538,7 @@ void MainWindow::updatePreprocessedAudioAsync() {
                 for (int i = 0; i < 9; ++i) {
                     double gainDb = filterStates[i] ? -60.0 : 0.0;
                     double A = std::pow(10.0, gainDb / 40.0);
-                    double w0 = 2.0 * M_PI * frequencies[i] / 44100.0;
+                    double w0 = 2.0 * M_PI * frequencies[i] / static_cast<double>(m_sampleRate);
                     double alpha = std::sin(w0) / 2.0;
                     double b0 = 1.0 + alpha * A;
                     double b1 = -2.0 * std::cos(w0);
@@ -573,7 +573,7 @@ void MainWindow::updatePreprocessedAudioAsync() {
             }
         } else {
             soundtouch::SoundTouch st;
-            st.setSampleRate(44100);
+            st.setSampleRate(m_sampleRate);
             st.setChannels(1);
             st.setTempo(tempo);
             st.setPitchSemiTones(pitchSt);
@@ -655,9 +655,9 @@ void MainWindow::updatePreprocessedAudioAsync() {
                 hopStr.remove('s');
                 double hopSec = hopStr.toDouble();
                 int fftVal = m_fftSizes[m_fftSizeCombo ? m_fftSizeCombo->currentIndex() : 4];
-                double dur = shifted.isEmpty() ? 0.0 : shifted.size() / 44100.0;
+                double dur = shifted.isEmpty() ? 0.0 : shifted.size() / static_cast<double>(m_sampleRate);
 
-                m_extractedChords = analyzeAudioChords(shifted, dur, 44100, hopSec, fftVal);
+                m_extractedChords = analyzeAudioChords(shifted, dur, m_sampleRate, hopSec, fftVal);
                 if (m_waveformWidget) {
                     m_waveformWidget->setChords(m_extractedChords);
                 }
@@ -744,6 +744,15 @@ void MainWindow::setupUi() {
         QGroupBox *waveformGroup = new QGroupBox(this);
         QVBoxLayout *waveLayout = new QVBoxLayout(waveformGroup);
 
+        // Info line above the waveform
+        m_infoLabel = new QLabel("No file loaded", this);
+        m_infoLabel->setStyleSheet(
+            "QLabel { background-color: #18181b; color: #a1a1aa; font-family: monospace; font-size: 18px; font-weight: bold; "
+            "padding: 6px 10px; border-radius: 4px; border: 1px solid #3f3f46; }"
+        );
+        m_infoLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        waveLayout->addWidget(m_infoLabel);
+
         m_waveformWidget = new GLWaveformWidget(this);
         m_waveformScrollBar = new QScrollBar(Qt::Horizontal, this);
         m_waveformScrollBar->setRange(0, 0);
@@ -787,7 +796,7 @@ void MainWindow::setupUi() {
         connect(m_waveformWidget, &GLWaveformWidget::scrollOffsetChanged, m_waveformScrollBar, &QScrollBar::setValue);
 
         connect(m_waveformWidget, &GLWaveformWidget::seekRequested, [this](double timeSeconds) {
-            double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / 44100.0);
+            double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / static_cast<double>(m_sampleRate));
             m_currentPositionSec = qMax(0.0, qMin(timeSeconds, totalSec));
             m_isPaused = false;
 
@@ -831,6 +840,29 @@ void MainWindow::setupUi() {
                     m_speedButtons[j]->setChecked(j == i);
                 m_currentSpeed = speedValues[i];
                 m_speedValueLabel->setText(QString("Speed: %1x").arg(speedValues[i], 0, 'f', 1));
+                // Refresh info line immediately with new playing rate
+                if (m_infoLabel && !m_currentFileName.isEmpty()) {
+                    double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / static_cast<double>(m_sampleRate));
+                    int totM = static_cast<int>(totalSec) / 60;
+                    int totS = static_cast<int>(totalSec) % 60;
+                    int curM = static_cast<int>(m_currentPositionSec) / 60;
+                    int curS = static_cast<int>(m_currentPositionSec) % 60;
+                    int curMs = static_cast<int>(m_currentPositionSec * 1000) % 1000;
+                    int totMs = static_cast<int>(totalSec * 1000) % 1000;
+                    QString chInfo = (m_channels == 1) ? "Mono" : (m_channels == 2) ? "Stereo" : QString("%1 ch").arg(m_channels);
+                    m_infoLabel->setText(QString("%1  |  %2  |  %3 Hz  |  %4x  |  %5  |  %6:%7:%8  |  %9:%10:%11")
+                                         .arg(m_currentFileName)
+                                         .arg(m_formatInfo)
+                                         .arg(m_sampleRate)
+                                         .arg(m_currentSpeed, 0, 'f', 1)
+                                         .arg(chInfo)
+                                         .arg(totM, 2, 10, QChar('0'))
+                                         .arg(totS, 2, 10, QChar('0'))
+                                         .arg(totMs, 3, 10, QChar('0'))
+                                         .arg(curM, 2, 10, QChar('0'))
+                                         .arg(curS, 2, 10, QChar('0'))
+                                         .arg(curMs, 3, 10, QChar('0')));
+                }
                 updateAudioEffects();
             });
         }
@@ -1094,9 +1126,9 @@ void MainWindow::setupUi() {
             int fftVal = m_fftSizes[m_fftSizeCombo->currentIndex()];
 
             if (!m_decodedSamples.isEmpty()) {
-                double totalDurationSec = m_decodedSamples.size() / 44100.0;
+                double totalDurationSec = m_decodedSamples.size() / static_cast<double>(m_sampleRate);
                 if (m_statusBar) m_statusBar->showMessage("Extracting chords, please wait...");
-                m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, 44100, hopSec, fftVal);
+                m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, m_sampleRate, hopSec, fftVal);
                 if (m_statusBar && !m_statusBar->currentMessage().contains("ERROR: Could not load Vamp")) {
                     m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
                     m_statusBar->showMessage("Ready...");
@@ -1156,7 +1188,7 @@ void MainWindow::updatePosition(qint64 position) {
     }
 
     double currentSec = position / 1000.0;
-    double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / 44100.0);
+    double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / static_cast<double>(m_sampleRate));
 
     if (m_repeatBtn->isChecked() && m_loopStartSec >= 0 && m_loopEndSec > m_loopStartSec) {
         if (currentSec >= m_loopEndSec) {
@@ -1203,6 +1235,31 @@ void MainWindow::updatePosition(qint64 position) {
                                .arg(curS, 2, 10, QChar('0'))
                                .arg(totM, 2, 10, QChar('0'))
                                .arg(totS, 2, 10, QChar('0')));
+    }
+
+    // Keep the info line cursor time in sync (throttled to ~10 Hz)
+    if (m_infoLabel && !m_currentFileName.isEmpty()) {
+        qint64 nowMs = position; // use media position as time base
+        if (nowMs - m_lastInfoUpdateMs >= 100 || m_lastInfoUpdateMs == 0) {
+            m_lastInfoUpdateMs = nowMs;
+
+            int curMs = static_cast<int>(currentSec * 1000) % 1000;
+            int totMs = static_cast<int>(totalSec * 1000) % 1000;
+            QString chInfo = (m_channels == 1) ? "Mono" : (m_channels == 2) ? "Stereo" : QString("%1 ch").arg(m_channels);
+
+            m_infoLabel->setText(QString("%1  |  %2  |  %3 Hz  |  %4x  |  %5  |  %6:%7:%8  |  %9:%10:%11")
+                                 .arg(m_currentFileName)
+                                 .arg(m_formatInfo)
+                                 .arg(m_sampleRate)
+                                 .arg(m_currentSpeed, 0, 'f', 1)
+                                 .arg(chInfo)
+                                 .arg(totM, 2, 10, QChar('0'))
+                                 .arg(totS, 2, 10, QChar('0'))
+                                 .arg(totMs, 3, 10, QChar('0'))
+                                 .arg(curM, 2, 10, QChar('0'))
+                                 .arg(curS, 2, 10, QChar('0'))
+                                 .arg(curMs, 3, 10, QChar('0')));
+        }
     }
 }
 
@@ -1254,7 +1311,7 @@ void MainWindow::togglePlayPause() {
     }
     if (m_preprocessedPcmData.isEmpty()) return;
 
-    if (!writePcmToTempWav(m_preprocessedPcmData, 44100, 1)) return;
+    if (!writePcmToTempWav(m_preprocessedPcmData, m_sampleRate, 1)) return;
 
     if (!m_player) return;
     m_player->setSource(QUrl::fromLocalFile(m_tempWavPath));
@@ -1312,12 +1369,34 @@ void MainWindow::openAudioFile() {
 }
 
 void MainWindow::loadAudioFile(const QString &filePath) {
+    // Always stop playback and fully reset position before loading a new file
     stopAudio();
+    m_currentPositionSec = 0.0;
+    m_isPaused = false;
+    m_loopStartSec = -1.0;
+    m_loopEndSec = -1.0;
+    if (m_repeatBtn) m_repeatBtn->setEnabled(false);
+
+    if (m_waveformWidget) {
+        m_waveformWidget->setPlaybackPosition(0.0);
+    }
+    if (m_timeDisplay) {
+        m_timeDisplay->setText("00:00 / 00:00");
+    }
+
     QApplication::setOverrideCursor(Qt::WaitCursor);
 
+    m_currentFileName = QFileInfo(filePath).fileName();
     m_player->setSource(QUrl::fromLocalFile(filePath));
     m_decodedSamples.clear();
     m_preprocessedPcmData.clear();
+    m_sampleRate = 44100;
+    m_channels = 1;
+    m_formatInfo = "Unknown";
+
+    if (m_infoLabel) {
+        m_infoLabel->setText(QString("%1  |  Loading…").arg(m_currentFileName));
+    }
 
     if (!m_audioDecoder) {
         m_audioDecoder = new QAudioDecoder(this);
@@ -1338,6 +1417,22 @@ void MainWindow::handleAudioBufferReady() {
     const QAudioFormat format = buffer.format();
     int sampleCount = buffer.sampleCount();
 
+    // Capture actual format from the first valid buffer
+    if (m_decodedSamples.isEmpty()) {
+        m_sampleRate = format.sampleRate() > 0 ? format.sampleRate() : 44100;
+        m_channels = format.channelCount() > 0 ? format.channelCount() : 1;
+
+        QString fmt;
+        switch (format.sampleFormat()) {
+            case QAudioFormat::Int16: fmt = "PCM 16-bit"; break;
+            case QAudioFormat::Int32: fmt = "PCM 32-bit"; break;
+            case QAudioFormat::Float: fmt = "Float 32"; break;
+            case QAudioFormat::UInt8: fmt = "PCM 8-bit"; break;
+            default: fmt = "Unknown"; break;
+        }
+        m_formatInfo = fmt;
+    }
+
     if (format.sampleFormat() == QAudioFormat::Int16) {
         const qint16 *data = buffer.constData<qint16>();
         for (int i = 0; i < sampleCount; i += format.channelCount()) {
@@ -1352,9 +1447,9 @@ void MainWindow::handleAudioBufferReady() {
 }
 
 void MainWindow::handleDecoderFinished() {
-    double totalDurationSec = m_decodedSamples.size() / 44100.0;
+    double totalDurationSec = m_decodedSamples.size() / static_cast<double>(m_sampleRate);
 
-    int detectedBpm = detectBpm(m_decodedSamples, 44100);
+    int detectedBpm = detectBpm(m_decodedSamples, m_sampleRate);
     if (m_tempoGroup) m_tempoGroup->setTitle(QString("TEMPO %1").arg(detectedBpm));
     if (m_waveformWidget) m_waveformWidget->setBpm(detectedBpm);
 
@@ -1364,7 +1459,7 @@ void MainWindow::handleDecoderFinished() {
     int fftVal = m_fftSizes[m_fftSizeCombo ? m_fftSizeCombo->currentIndex() : 4];
 
     if (m_statusBar) m_statusBar->showMessage("Extracting chords, please wait...");
-    m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, 44100, hopSec, fftVal);
+    m_extractedChords = analyzeAudioChords(m_decodedSamples, totalDurationSec, m_sampleRate, hopSec, fftVal);
 
     if (m_statusBar && !m_statusBar->currentMessage().contains("ERR")) {
         m_statusBar->setStyleSheet("QStatusBar { background-color: #09090b; color: #f59e0b; font-family: monospace; font-size: 12px; }");
@@ -1372,9 +1467,26 @@ void MainWindow::handleDecoderFinished() {
     }
 
     if (m_waveformWidget) {
-        m_waveformWidget->setAudioBuffer(m_decodedSamples, totalDurationSec, 44100);
+        m_waveformWidget->setAudioBuffer(m_decodedSamples, totalDurationSec, m_sampleRate);
         m_waveformWidget->setChords(m_extractedChords);
         m_waveformWidget->setPitchShift(m_currentPitch);
+    }
+
+    // Update info line with full details
+    if (m_infoLabel) {
+        int totM = static_cast<int>(totalDurationSec) / 60;
+        int totS = static_cast<int>(totalDurationSec) % 60;
+        int totMs = static_cast<int>(totalDurationSec * 1000) % 1000;
+        QString chInfo = (m_channels == 1) ? "Mono" : (m_channels == 2) ? "Stereo" : QString("%1 ch").arg(m_channels);
+        m_infoLabel->setText(QString("%1  |  %2  |  %3 Hz  |  %4x  |  %5  |  %6:%7:%8  |  00:00:000")
+                             .arg(m_currentFileName.isEmpty() ? "Unknown" : m_currentFileName)
+                             .arg(m_formatInfo)
+                             .arg(m_sampleRate)
+                             .arg(m_currentSpeed, 0, 'f', 1)
+                             .arg(chInfo)
+                             .arg(totM, 2, 10, QChar('0'))
+                             .arg(totS, 2, 10, QChar('0'))
+                             .arg(totMs, 3, 10, QChar('0')));
     }
 
     updatePreprocessedAudio();

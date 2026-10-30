@@ -96,6 +96,7 @@ private:
     QLabel *m_timelineValueLabel = nullptr;
     QLabel *m_hopSizeLabel = nullptr;
     QLabel *m_fftSizeLabel = nullptr;
+    QLabel *m_infoLabel = nullptr;   // Info line above waveform
 
     QPushButton *m_speedButtons[7] = {nullptr};
     float m_currentSpeed = 1.0f;
@@ -128,6 +129,10 @@ private:
     QVector<float> m_decodedSamples;
     QByteArray m_preprocessedPcmData;
     QString m_tempWavPath;
+    QString m_currentFileName;
+    int m_sampleRate = 44100;
+    int m_channels = 1;
+    QString m_formatInfo = "Unknown";
     QVector<ChordMarker> m_extractedChords;
     const int m_fftSizes[4] = {2048, 4096, 8192, 16384};
 
@@ -139,6 +144,7 @@ private:
     bool m_resumeAfterProcess = false;
     bool m_reanalyzeChordsAfterProcess = false;
     qint64 m_playbackStartTimeMs = 0;
+    qint64 m_lastInfoUpdateMs = 0;   // throttle info-line time updates
 
 
 
