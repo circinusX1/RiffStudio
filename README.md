@@ -1,6 +1,6 @@
 # RiffStudio (for Linux Only)
 
-[Buy a cofe](https://www.paypal.com/ncp/payment/UY6RJK9AQ6HVC)
+[Buy me a coffee](https://www.paypal.com/ncp/payment/UY6RJK9AQ6HVC)
 
 ### web version:       https://ghitara.com/riff/
 #### the other branch uses extensia library as the web version.
