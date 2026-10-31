@@ -235,7 +235,7 @@ void MainWindow::applyGraphicEQ(QVector<float> &samples, int sampleRate) {
     std::vector<BiquadState> filters(9);
     for (int i = 0; i < 9; ++i) {
         // Toggled down = -60 dB (cut/suppress), Un-toggled = 0.0 dB (no change)
-        double gainDb = m_filterStates[i] ? -20.0 : 0.0;
+        double gainDb = m_filterStates[i] ? -60.0 : 0.0;
 
         double A = std::pow(10.0, gainDb / 40.0);
         double w0 = 2.0 * M_PI * frequencies[i] / sampleRate;
@@ -485,7 +485,8 @@ void MainWindow::updatePreprocessedAudioAsync() {
 
     m_resumeAfterProcess = false;
     if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
-        m_currentPositionSec = m_player->position() / 1000.0;
+        float tempo = qMax(0.01f, m_currentSpeed);
+        m_currentPositionSec = (m_player->position() / 1000.0) * tempo;
         m_player->pause();
         m_isPaused = true;
         m_resumeAfterProcess = true;
@@ -536,7 +537,7 @@ void MainWindow::updatePreprocessedAudioAsync() {
                 };
                 std::vector<BiquadState> filters(9);
                 for (int i = 0; i < 9; ++i) {
-                    double gainDb = filterStates[i] ? -20.0 : 0.0;
+                    double gainDb = filterStates[i] ? -60.0 : 0.0;
                     double A = std::pow(10.0, gainDb / 40.0);
                     double w0 = 2.0 * M_PI * frequencies[i] / static_cast<double>(m_sampleRate);
                     double alpha = std::sin(w0) / 2.0;
@@ -800,8 +801,8 @@ void MainWindow::setupUi() {
             m_currentPositionSec = qMax(0.0, qMin(timeSeconds, totalSec));
             m_isPaused = false;
 
-            float tempo = m_currentSpeed;
-            double effectiveSec = m_currentPositionSec * tempo;
+            float tempo = qMax(0.01f, m_currentSpeed);
+            double effectiveSec = m_currentPositionSec / tempo;
             qint64 posMs = static_cast<qint64>(qMax(0.0, effectiveSec) * 1000);
 
             if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
@@ -840,6 +841,8 @@ void MainWindow::setupUi() {
                     m_speedButtons[j]->setChecked(j == i);
                 m_currentSpeed = speedValues[i];
                 m_speedValueLabel->setText(QString("Speed: %1x").arg(speedValues[i], 0, 'f', 1));
+                if (m_waveformWidget) m_waveformWidget->clearSelection();
+                m_reanalyzeChordsAfterProcess = true;
                 // Refresh info line immediately with new playing rate
                 if (m_infoLabel && !m_currentFileName.isEmpty()) {
                     double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / static_cast<double>(m_sampleRate));
@@ -903,6 +906,7 @@ void MainWindow::setupUi() {
                 for (int j = 0; j < 9; ++j)
                     m_pitchButtons[j]->setChecked(j == i);
                 m_currentPitch = pitchValues[i];
+                if (m_waveformWidget) m_waveformWidget->clearSelection();
                 m_reanalyzeChordsAfterProcess = true;
                 QString sign = (pitchValues[i] > 0) ? "+" : "";
                 m_pitchValueLabel->setText(QString("Pitch: %1%2 st").arg(sign).arg(pitchValues[i], 0, 'f', 1));
@@ -935,11 +939,10 @@ void MainWindow::setupUi() {
         const QString filterLabels[] = {"31", "62", "125", "250", "500", "1K", "2K", "4K", "8K"};
 
         // Pitch button style reference for consistent sizing
-        // Pitch button style reference for consistent sizing
-                QString filterBtnStyle =
-                    "QPushButton { background-color: #18181b; color: #f59e0b; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold; font-size: 11px; min-width: 32px; min-height: 48px; max-height: 48px; }"
-                    "QPushButton:checked { background-color: #ef4444; color: #09090b; border-color: #dc2626; }"
-                    "QPushButton:disabled { background-color: #27272a; color: #52525b; border-color: #3f3f46; }";
+        QString filterBtnStyle =
+            "QPushButton { background-color: #18181b; color: #f59e0b; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold; font-size: 11px; min-width: 32px; min-height: 32px; }"
+            "QPushButton:checked { background-color: #ef4444; color: #09090b; border-color: #dc2626; }"
+            "QPushButton:disabled { background-color: #27272a; color: #52525b; border-color: #3f3f46; }";
 
         for (int i = 0; i < 9; ++i) {
             QVBoxLayout *colLayout = new QVBoxLayout();
@@ -957,13 +960,6 @@ void MainWindow::setupUi() {
 
             connect(m_filterButtons[i], &QPushButton::toggled, [this, i](bool checked) {
                 m_filterStates[i] = checked; // true = Down (-60 dB cut), false = Up (0 dB / un-toggled)
-
-                // When toggled (checked), reduce size in half (24px). When un-toggled, restore original height (48px).
-                if (m_filterButtons[i]) {
-                    int targetHeight = checked ? 24 : 48;
-                    m_filterButtons[i]->setFixedHeight(targetHeight);
-                }
-
                 updateAudioEffects();
             });
         }
@@ -1195,14 +1191,15 @@ void MainWindow::updatePosition(qint64 position) {
         return;
     }
 
-    double currentSec = position / 1000.0;
+    float tempo = qMax(0.01f, m_currentSpeed);
+    double playerSec = position / 1000.0;
+    double currentSec = playerSec * tempo;  // convert player time -> original waveform time
     double totalSec = m_decodedSamples.isEmpty() ? 0.0 : (m_decodedSamples.size() / static_cast<double>(m_sampleRate));
 
     if (m_repeatBtn->isChecked() && m_loopStartSec >= 0 && m_loopEndSec > m_loopStartSec) {
         if (currentSec >= m_loopEndSec) {
             m_currentPositionSec = m_loopStartSec;
-            float tempo = m_currentSpeed;
-            double effectiveSec = m_loopStartSec * tempo;
+            double effectiveSec = m_loopStartSec / tempo;
             qint64 posMs = static_cast<qint64>(qMax(0.0, effectiveSec) * 1000);
             if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
                 m_player->setPosition(posMs);
@@ -1297,7 +1294,8 @@ void MainWindow::togglePlayPause() {
     if (m_decodedSamples.isEmpty()) return;
 
     if (m_player && m_player->playbackState() == QMediaPlayer::PlayingState) {
-        m_currentPositionSec = m_player->position() / 1000.0;
+        float tempo = qMax(0.01f, m_currentSpeed);
+        m_currentPositionSec = (m_player->position() / 1000.0) * tempo;
         m_player->pause();
         m_isPaused = true;
         if (m_waveformWidget) {
@@ -1326,7 +1324,7 @@ void MainWindow::togglePlayPause() {
 
     double startSec = m_currentPositionSec;
     if (startSec < 0.0) startSec = 0.0;
-    double effectiveSec = startSec * tempo;
+    double effectiveSec = startSec / qMax(0.01f, tempo);
     qint64 posMs = static_cast<qint64>(qMax(0.0, effectiveSec) * 1000);
 
     QMetaObject::Connection *conn = new QMetaObject::Connection;

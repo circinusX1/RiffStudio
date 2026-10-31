@@ -108,9 +108,16 @@ void GLWaveformWidget::setAccentColor(const QColor &color) {
     m_accentColor = color;
     update();
 }
-
 void GLWaveformWidget::setPitchShift(float semitones) {
     m_pitchShift = semitones;
+    update();
+}
+
+void GLWaveformWidget::clearSelection() {
+    m_selectStartSec = -1.0;
+    m_selectEndSec = -1.0;
+    m_isSelecting = false;
+    emit selectionChanged(-1.0, -1.0);
     update();
 }
 

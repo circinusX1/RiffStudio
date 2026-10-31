@@ -24,6 +24,7 @@ public:
     void setBpm(int bpm);
     void setVisibleFraction(float fraction);
     void setScrollOffset(int offset);
+    void clearSelection();
 
     int getTotalWidth() const;
     int getMaxScrollOffset() const;
