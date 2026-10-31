@@ -1,8 +1,9 @@
-# RiffStudio (for Linux Only)
+# RiffTabs (for Linux Only)
 
 [Buy me a coffee](https://www.paypal.com/ncp/payment/UY6RJK9AQ6HVC)
 
 ### web version:       https://ghitara.com/riff/
+   * In the above page there is a link to download latest AppRun image
 #### the other branch uses extensia library as the web version.
 
 
