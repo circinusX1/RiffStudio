@@ -732,7 +732,7 @@ void MainWindow::setupMenuBar() {
     connect(exitAction, &QAction::triggered, this, &QWidget::close);
 
     QMenu *aboutMenu = menuBar()->addMenu("&About");
-    QAction *aboutAction = aboutMenu->addAction("&About WebRiffStudio");
+    QAction *aboutAction = aboutMenu->addAction("&About RiffTabs");
     connect(aboutAction, &QAction::triggered, this, &MainWindow::showAboutDialog);
 }
 
@@ -1500,7 +1500,7 @@ void MainWindow::handleDecoderFinished() {
 }
 
 void MainWindow::addRecentFile(const QString &filePath) {
-    QSettings settings("WebRiffStudio", "WebRiffStudio");
+    QSettings settings("RiffTabs", "RiffTabs");
     QStringList files = settings.value("recentFileList").toStringList();
 
     files.removeAll(filePath);
@@ -1514,7 +1514,7 @@ void MainWindow::addRecentFile(const QString &filePath) {
 }
 
 void MainWindow::updateRecentFileActions() {
-    QSettings settings("WebRiffStudio", "WebRiffStudio");
+    QSettings settings("RiffTabs", "RiffTabs");
     QStringList files = settings.value("recentFileList").toStringList();
 
     int numRecentFiles = qMin(files.size(), (int)MaxRecentFiles);
@@ -1542,7 +1542,7 @@ void MainWindow::openRecentFile() {
         if (QFileInfo::exists(filePath)) {
             loadAudioFile(filePath);
         } else {
-            QSettings settings("WebRiffStudio", "WebRiffStudio");
+            QSettings settings("RiffTabs", "RiffTabs");
             QStringList files = settings.value("recentFileList").toStringList();
             files.removeAll(filePath);
             settings.setValue("recentFileList", files);
@@ -1552,13 +1552,13 @@ void MainWindow::openRecentFile() {
 }
 
 void MainWindow::clearRecentFiles() {
-    QSettings settings("WebRiffStudio", "WebRiffStudio");
+    QSettings settings("RiffTabs", "RiffTabs");
     settings.remove("recentFileList");
     updateRecentFileActions();
 }
 
 void MainWindow::loadLastOpenedFile() {
-    QSettings settings("WebRiffStudio", "WebRiffStudio");
+    QSettings settings("RiffTabs", "RiffTabs");
     QStringList files = settings.value("recentFileList").toStringList();
 
     if (!files.isEmpty()) {
@@ -1605,7 +1605,7 @@ QIcon MainWindow::createAppIcon() {
 
 void MainWindow::showAboutDialog() {
     QDialog aboutDialog(this);
-    aboutDialog.setWindowTitle("About WebRiffStudio");
+    aboutDialog.setWindowTitle("About RiffTabs");
     aboutDialog.setFixedSize(360, 220);
     aboutDialog.setStyleSheet("background-color: #09090b; color: #f4f4f5;");
 
@@ -1617,7 +1617,7 @@ void MainWindow::showAboutDialog() {
     iconLabel->setPixmap(createAppIcon().pixmap(64, 64));
 
     QVBoxLayout *textLayout = new QVBoxLayout();
-    QLabel *titleLabel = new QLabel("<b>WebRiffStudio</b>", &aboutDialog);
+    QLabel *titleLabel = new QLabel("<b>RiffTabs</b>", &aboutDialog);
     titleLabel->setStyleSheet("font-size: 18px; color: #f59e0b;");
 
     QLabel *verLabel = new QLabel("Version 1.0.0", &aboutDialog);
@@ -1650,7 +1650,7 @@ void MainWindow::showAboutDialog() {
 }
 
 void MainWindow::saveSettings() {
-    QSettings settings("WebRiffStudio", "WebRiffStudio");
+    QSettings settings("RiffTabs", "RiffTabs");
     settings.setValue("theme/cyan", m_cyanTheme);
     settings.setValue("fingering/power", m_fingeringToggleBtn ? m_fingeringToggleBtn->isChecked() : false);
     settings.setValue("chords/hopSizeIndex", m_hopSizeCombo ? m_hopSizeCombo->currentIndex() : 1);
@@ -1663,7 +1663,7 @@ void MainWindow::saveSettings() {
 
 
 void MainWindow::loadSettings() {
-    QSettings settings("WebRiffStudio", "WebRiffStudio");
+    QSettings settings("RiffTabs", "RiffTabs");
 
     bool cyan = settings.value("theme/cyan", false).toBool();
     m_cyanTheme = cyan;

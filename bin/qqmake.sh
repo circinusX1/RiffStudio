@@ -3,7 +3,7 @@
 # Usage: ./qqmake.bat [qmake arguments]
 # Example: ./qqmake.bat ../WebRiffStudio.pro
 
-QT_ROOT="${HOME}/Qt/6.7.3/gcc_64"
+QT_ROOT="${QT_PATH_AND_VER}/gcc_64"
 
 # Make sure the Qt 6.7.3 tools and libraries are used
 export PATH="$QT_ROOT/bin:$PATH"

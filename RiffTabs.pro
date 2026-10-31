@@ -9,7 +9,7 @@ greaterThan(QT_MAJOR_VERSION, 5) {
 
 CONFIG += c++17
 
-TARGET = WebRiffStudio
+TARGET = RiffTabs
 TEMPLATE = app
 
 SOURCES += \
