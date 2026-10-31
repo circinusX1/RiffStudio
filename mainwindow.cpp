@@ -235,7 +235,7 @@ void MainWindow::applyGraphicEQ(QVector<float> &samples, int sampleRate) {
     std::vector<BiquadState> filters(9);
     for (int i = 0; i < 9; ++i) {
         // Toggled down = -60 dB (cut/suppress), Un-toggled = 0.0 dB (no change)
-        double gainDb = m_filterStates[i] ? -60.0 : 0.0;
+        double gainDb = m_filterStates[i] ? -20.0 : 0.0;
 
         double A = std::pow(10.0, gainDb / 40.0);
         double w0 = 2.0 * M_PI * frequencies[i] / sampleRate;
@@ -536,7 +536,7 @@ void MainWindow::updatePreprocessedAudioAsync() {
                 };
                 std::vector<BiquadState> filters(9);
                 for (int i = 0; i < 9; ++i) {
-                    double gainDb = filterStates[i] ? -60.0 : 0.0;
+                    double gainDb = filterStates[i] ? -20.0 : 0.0;
                     double A = std::pow(10.0, gainDb / 40.0);
                     double w0 = 2.0 * M_PI * frequencies[i] / static_cast<double>(m_sampleRate);
                     double alpha = std::sin(w0) / 2.0;
@@ -935,10 +935,11 @@ void MainWindow::setupUi() {
         const QString filterLabels[] = {"31", "62", "125", "250", "500", "1K", "2K", "4K", "8K"};
 
         // Pitch button style reference for consistent sizing
-        QString filterBtnStyle =
-            "QPushButton { background-color: #18181b; color: #f59e0b; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold; font-size: 11px; min-width: 32px; min-height: 32px; }"
-            "QPushButton:checked { background-color: #ef4444; color: #09090b; border-color: #dc2626; }"
-            "QPushButton:disabled { background-color: #27272a; color: #52525b; border-color: #3f3f46; }";
+        // Pitch button style reference for consistent sizing
+                QString filterBtnStyle =
+                    "QPushButton { background-color: #18181b; color: #f59e0b; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold; font-size: 11px; min-width: 32px; min-height: 48px; max-height: 48px; }"
+                    "QPushButton:checked { background-color: #ef4444; color: #09090b; border-color: #dc2626; }"
+                    "QPushButton:disabled { background-color: #27272a; color: #52525b; border-color: #3f3f46; }";
 
         for (int i = 0; i < 9; ++i) {
             QVBoxLayout *colLayout = new QVBoxLayout();
@@ -956,6 +957,13 @@ void MainWindow::setupUi() {
 
             connect(m_filterButtons[i], &QPushButton::toggled, [this, i](bool checked) {
                 m_filterStates[i] = checked; // true = Down (-60 dB cut), false = Up (0 dB / un-toggled)
+
+                // When toggled (checked), reduce size in half (24px). When un-toggled, restore original height (48px).
+                if (m_filterButtons[i]) {
+                    int targetHeight = checked ? 24 : 48;
+                    m_filterButtons[i]->setFixedHeight(targetHeight);
+                }
+
                 updateAudioEffects();
             });
         }
